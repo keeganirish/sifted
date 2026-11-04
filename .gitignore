@@ -1,19 +1,89 @@
-CMakeLists.txt.user
+# --- Build output (CMake / C++) ---
+build/
+build-*/
+out/
+cmake-build-*/
 CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
-Makefile
+CMakeFiles/
 cmake_install.cmake
-install_manifest.txt
-compile_commands.json
 CTestTestfile.cmake
-_deps
+Testing/
 CMakeUserPresets.json
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.d
+*.gch
+*.pch
 
-# CLion
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#cmake-build-*
+# --- Sanitizer, profiling, and debug artifacts ---
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+callgrind.out.*
+perf.data*
+core
+core.*
+vgcore.*
+*.dSYM/
+
+# --- Fuzzing artifacts (keep the curated corpus under fuzz/corpus/) ---
+crash-*
+leak-*
+oom-*
+timeout-*
+slow-unit-*
+fuzz-*.log
+
+# --- Python (simulators, analysis, plotting) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# --- Web client ---
+node_modules/
+web/dist/
+npm-debug.log*
+
+# --- Project data ---
+# Recorded runs and benchmark output can be large; commit only small curated
+# fixtures under tests/fixtures/.
+recordings/
+data/
+benchmarks/results/
+*.siftlog
+
+# --- Secrets and local config ---
+.env
+.env.*
+*.local
+secrets/
+credentials*.json
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Editors and OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
