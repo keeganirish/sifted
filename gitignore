@@ -1,0 +1,89 @@
+# --- Build output (CMake / C++) ---
+build/
+build-*/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+CMakeUserPresets.json
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.d
+*.gch
+*.pch
+
+# --- Sanitizer, profiling, and debug artifacts ---
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+callgrind.out.*
+perf.data*
+core
+core.*
+vgcore.*
+*.dSYM/
+
+# --- Fuzzing artifacts (keep the curated corpus under fuzz/corpus/) ---
+crash-*
+leak-*
+oom-*
+timeout-*
+slow-unit-*
+fuzz-*.log
+
+# --- Python (simulators, analysis, plotting) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# --- Web client ---
+node_modules/
+web/dist/
+npm-debug.log*
+
+# --- Project data ---
+# Recorded runs and benchmark output can be large; commit only small curated
+# fixtures under tests/fixtures/.
+recordings/
+data/
+benchmarks/results/
+*.siftlog
+
+# --- Secrets and local config ---
+.env
+.env.*
+*.local
+secrets/
+credentials*.json
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Editors and OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
