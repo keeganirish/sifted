@@ -30,8 +30,8 @@ compile_commands.json
 *.gcno
 callgrind.out.*
 perf.data*
-core
-core.*
+/core
+/core.*
 vgcore.*
 *.dSYM/
 
