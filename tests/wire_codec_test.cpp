@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <fstream>
-#include <iterator>
 #include <string>
 #include <vector>
 
@@ -26,7 +25,8 @@ Measurement sample() {
 
 Bytes read_hex_fixture(const std::string& name) {
   std::ifstream f(std::string(SIFTED_FIXTURE_DIR) + "/" + name);
-  const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  std::string text;
+  f >> text;  // the fixture is a single line of hex digits
   Bytes out;
   for (std::size_t i = 0; i + 1 < text.size(); i += 2) {
     out.push_back(static_cast<std::uint8_t>(std::stoi(text.substr(i, 2), nullptr, 16)));
