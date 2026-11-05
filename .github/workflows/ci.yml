@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build-test:
+    name: ${{ matrix.cxx }} / release
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++-13, clang++-18]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libeigen3-dev libgtest-dev
+      - name: Configure
+        run: cmake --preset release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+      - run: cmake --build --preset release
+      - run: ctest --preset release
+
+  sanitizers:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [asan, tsan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libeigen3-dev libgtest-dev
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }}
+
+  fuzz-smoke:
+    name: fuzz smoke (60s)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          ninja-build clang-18 libclang-rt-18-dev libeigen3-dev libgtest-dev
+      - run: cmake --preset fuzz -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build --preset fuzz --target fuzz_decode
+      - name: Fuzz
+        run: |
+          mkdir -p build/fuzz-work
+          build/fuzz/fuzz/fuzz_decode build/fuzz-work fuzz/corpus -max_total_time=60 -rss_limit_mb=2048
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: crash-*
+
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang-format-18
+          find src tests fuzz -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run -Werror

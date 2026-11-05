@@ -1,0 +1,20 @@
+---
+# Kept deliberately modest so it is quiet enough to stay on in CI. Tighten
+# as the codebase grows.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  clang-analyzer-*,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  misc-*,
+  -misc-non-private-member-variables-in-classes,
+  -misc-include-cleaner,
+  modernize-use-override,
+  modernize-use-nullptr,
+  performance-*,
+  readability-container-size-empty,
+  readability-redundant-*
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/.*'
