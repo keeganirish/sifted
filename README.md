@@ -6,7 +6,7 @@ Sifted takes noisy, partial, and sometimes conflicting measurements from many se
 
 It is a small-scale, from-scratch take on the core problem behind modern situational-awareness software. The goal is a working, well-tested, well-documented system that demonstrates systems-level engineering: determinism, traceability, robust handling of untrusted input, thread safety, networking, and measured performance.
 
-> **Status: early development (milestone 0 complete).** The build, CI, sanitizer and fuzzing setup, the validated wire format and the simulated clock exist; the fusion pipeline itself does not yet. Features below describe the design; they are marked as built only when they are. See the [roadmap](#roadmap) and [`docs/design.md`](docs/design.md).
+> **Status: early development (milestones 0 and 1 complete).** The build, CI, sanitizer and fuzzing setup, the validated wire format and the simulated clock exist, plus a deterministic radar simulator, a single-track Kalman/EKF tracker and ground-truth regression tests. Multi-target association, networking, replay and the live map do not exist yet. Features below describe the design; they are marked as built only when they are. See the [roadmap](#roadmap) and [`docs/design.md`](docs/design.md).
 
 ## Features
 
@@ -73,12 +73,13 @@ build/fuzz/fuzz/fuzz_decode build/fuzz-work fuzz/corpus -max_total_time=60
 ## Layout
 
 ```
-src/sifted/   library: core (types, clock, engine), wire (codec), and the
-              estimation/association/store/replay/net modules (planned, see each README)
+src/sifted/   library: core (types, clock, sensor table, engine), wire (codec),
+              estimation (Kalman filter, EKF), and the association/store/replay/net
+              modules (planned, see each README)
 src/apps/     executables (sifted_fusiond, placeholder)
 sim/          sensor simulators and scenario generators (Python)
 web/          operator map client (placeholder)
-tests/        unit tests and fixtures; ground-truth scenarios to come
+tests/        unit tests, fixtures, and ground-truth scenario regression tests
 fuzz/         libFuzzer targets and seed corpus
 docs/         design document, threat model, ADRs; benchmark report to come
 cmake/        build options, sanitizers, dependencies
@@ -87,8 +88,8 @@ cmake/        build options, sanitizers, dependencies
 ## Roadmap
 
 - [x] Milestone 0: project skeleton, CI, sanitizers, fuzz harness, wire format, simulated clock
-- [ ] Sensor simulator, single-sensor tracker, ground-truth regression test
-- [ ] Multi-sensor association, networking, record and replay, basic live display, ADS-B ingest
+- [x] Milestone 1: radar simulator, sensor table, single-sensor Kalman/EKF tracker, ground-truth regression tests (camera simulator moved to M2)
+- [ ] Multi-sensor association, camera simulator, networking, record and replay, basic live display, ADS-B ingest
 - [ ] Fuzzing, degraded-network tests, benchmarks, design document, demo video
 - [ ] Stretch: CUDA-accelerated association
 

@@ -2,7 +2,11 @@ include(GoogleTest)
 
 add_executable(sifted_tests
   clock_test.cpp
+  engine_test.cpp
+  estimation_test.cpp
   measurement_test.cpp
+  scenario_regression_test.cpp
+  sensor_table_test.cpp
   wire_codec_test.cpp)
 target_link_libraries(sifted_tests PRIVATE sifted::core sifted_options GTest::gtest_main)
 target_compile_definitions(sifted_tests PRIVATE

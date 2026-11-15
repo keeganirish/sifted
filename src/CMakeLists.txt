@@ -6,6 +6,9 @@ add_library(sifted_core STATIC
   sifted/core/clock.cpp
   sifted/core/engine.cpp
   sifted/core/measurement.cpp
+  sifted/core/sensor.cpp
+  sifted/estimation/cv_filter.cpp
+  sifted/estimation/range_bearing.cpp
   sifted/wire/codec.cpp)
 add_library(sifted::core ALIAS sifted_core)
 
