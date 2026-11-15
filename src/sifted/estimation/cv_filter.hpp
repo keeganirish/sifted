@@ -2,7 +2,9 @@
 
 #include <Eigen/Cholesky>
 #include <Eigen/Core>
+#include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "sifted/core/result.hpp"
@@ -43,7 +45,8 @@ std::string_view to_string(FilterStatus s) noexcept;
 class ConstantVelocityFilter {
  public:
   // Longest single prediction step accepted. Longer gaps mean the track should
-  // be re-initialised rather than extrapolated (track lifecycle is M2).
+  // be re-initialised rather than extrapolated; the engine's lifecycle drops
+  // stale tracks long before this (docs/design.md section 6).
   static constexpr double kMaxPredictDt = 3600.0;
 
   // Validates x0 (finite), P0 (finite, symmetric, positive definite) and
@@ -66,6 +69,25 @@ class ConstantVelocityFilter {
   FilterStatus update_with_innovation(const Eigen::Matrix<double, M, 1>& y,
                                       const Eigen::Matrix<double, M, kStateDim>& H,
                                       const Eigen::Matrix<double, M, M>& R) noexcept;
+
+  // Squared Mahalanobis distance d^2 = y^T S^-1 y with S = H P H^T + R, the
+  // gating statistic for a measurement linearised at the current state. Read
+  // only. nullopt for non-finite input or an S that is not positive definite.
+  template <int M>
+  std::optional<double> mahalanobis2(const Eigen::Matrix<double, M, 1>& y,
+                                     const Eigen::Matrix<double, M, kStateDim>& H,
+                                     const Eigen::Matrix<double, M, M>& R) const noexcept;
+
+  // Changes the process noise used by later predictions (e.g. while a
+  // manoeuvre is detected). Returns false and changes nothing unless
+  // accel_psd is finite and >= 0.
+  bool set_accel_psd(double accel_psd) noexcept {
+    if (!(accel_psd >= 0.0) || !std::isfinite(accel_psd)) {
+      return false;
+    }
+    accel_psd_ = accel_psd;
+    return true;
+  }
 
   const StateVector& state() const noexcept { return x_; }
   const StateCovariance& covariance() const noexcept { return P_; }
@@ -127,6 +149,27 @@ FilterStatus ConstantVelocityFilter::update_with_innovation(
   x_ = x_new;
   P_ = P_new;
   return FilterStatus::Ok;
+}
+
+template <int M>
+std::optional<double> ConstantVelocityFilter::mahalanobis2(
+    const Eigen::Matrix<double, M, 1>& y, const Eigen::Matrix<double, M, kStateDim>& H,
+    const Eigen::Matrix<double, M, M>& R) const noexcept {
+  if (!y.allFinite() || !H.allFinite() || !is_covariance(R)) {
+    return std::nullopt;
+  }
+  using MatMM = Eigen::Matrix<double, M, M>;
+  const MatMM S = H * P_ * H.transpose() + R;
+  const Eigen::LLT<MatMM> llt(S);
+  if (llt.info() != Eigen::Success) {
+    return std::nullopt;
+  }
+  const Eigen::Matrix<double, M, 1> w = llt.solve(y);
+  const double d2 = y.dot(w);
+  if (!std::isfinite(d2)) {
+    return std::nullopt;
+  }
+  return d2;
 }
 
 }  // namespace sifted::estimation

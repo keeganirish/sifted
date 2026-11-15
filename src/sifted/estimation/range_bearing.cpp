@@ -52,28 +52,36 @@ LocalPosition range_bearing_to_local(const RangeBearing& z, const RangeBearing& 
   return out;
 }
 
-FilterStatus update_range_bearing(ConstantVelocityFilter& filter, const SensorPose& pose,
-                                  const RangeBearing& z, const RangeBearing& sigma) noexcept {
+std::optional<Linearized<2>> range_bearing_innovation(const StateVector& x, const SensorPose& pose,
+                                                      const RangeBearing& z,
+                                                      const RangeBearing& sigma) noexcept {
   if (!std::isfinite(z.range_m) || !std::isfinite(z.bearing_rad) || !(z.range_m >= 0.0) ||
       !(sigma.range_m > 0.0) || !(sigma.bearing_rad > 0.0) || !std::isfinite(sigma.range_m) ||
-      !std::isfinite(sigma.bearing_rad)) {
-    return FilterStatus::InvalidInput;
+      !std::isfinite(sigma.bearing_rad) || !x.allFinite()) {
+    return std::nullopt;
   }
-  const StateVector& x = filter.state();
   const RangeBearing predicted = predict_range_bearing(x, pose);
   if (!(predicted.range_m >= kMinRangeForUpdateM)) {
-    return FilterStatus::InvalidInput;
+    return std::nullopt;
   }
 
-  Eigen::Vector2d y;
-  y(0) = z.range_m - predicted.range_m;
-  y(1) = wrap_angle(z.bearing_rad - predicted.bearing_rad);
+  Linearized<2> l;
+  l.y(0) = z.range_m - predicted.range_m;
+  l.y(1) = wrap_angle(z.bearing_rad - predicted.bearing_rad);
+  l.H = range_bearing_jacobian(x, pose);
+  l.R = Eigen::Matrix2d::Zero();
+  l.R(0, 0) = sigma.range_m * sigma.range_m;
+  l.R(1, 1) = sigma.bearing_rad * sigma.bearing_rad;
+  return l;
+}
 
-  Eigen::Matrix2d R = Eigen::Matrix2d::Zero();
-  R(0, 0) = sigma.range_m * sigma.range_m;
-  R(1, 1) = sigma.bearing_rad * sigma.bearing_rad;
-
-  return filter.update_with_innovation<2>(y, range_bearing_jacobian(x, pose), R);
+FilterStatus update_range_bearing(ConstantVelocityFilter& filter, const SensorPose& pose,
+                                  const RangeBearing& z, const RangeBearing& sigma) noexcept {
+  const auto l = range_bearing_innovation(filter.state(), pose, z, sigma);
+  if (!l) {
+    return FilterStatus::InvalidInput;
+  }
+  return filter.update_with_innovation<2>(l->y, l->H, l->R);
 }
 
 }  // namespace sifted::estimation

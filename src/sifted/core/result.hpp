@@ -19,6 +19,7 @@ class [[nodiscard]] Result {
 
   // Precondition: ok(). Throws std::bad_variant_access otherwise.
   const T& value() const { return std::get<0>(v_); }
+  T& value() { return std::get<0>(v_); }
   // Precondition: !ok(). Throws std::bad_variant_access otherwise.
   const E& error() const { return std::get<1>(v_); }
 

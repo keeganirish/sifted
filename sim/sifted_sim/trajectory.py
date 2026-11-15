@@ -80,3 +80,18 @@ class Trajectory:
                 return _advance(s0, seg, t)
             t -= seg.duration_s
         return _advance(self._starts[-1], self.segments[-1], self.segments[-1].duration_s)
+
+
+@dataclass(frozen=True)
+class Target:
+    """A trajectory placed in scenario time: it exists from start_s until start_s + duration."""
+
+    target_id: int
+    trajectory: Trajectory
+    start_s: float = 0.0
+
+    def state_at(self, t_s: float) -> TargetState | None:
+        local = t_s - self.start_s
+        if local < 0.0 or local > self.trajectory.duration_s:
+            return None
+        return self.trajectory.state_at(local)

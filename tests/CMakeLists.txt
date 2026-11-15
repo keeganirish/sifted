@@ -1,14 +1,22 @@
 include(GoogleTest)
 
 add_executable(sifted_tests
+  association_test.cpp
+  bearing_only_test.cpp
   clock_test.cpp
   engine_test.cpp
   estimation_test.cpp
+  event_log_test.cpp
+  geodetic_test.cpp
+  ingest_test.cpp
   measurement_test.cpp
+  multi_target_regression_test.cpp
   scenario_regression_test.cpp
   sensor_table_test.cpp
+  track_store_test.cpp
+  websocket_test.cpp
   wire_codec_test.cpp)
-target_link_libraries(sifted_tests PRIVATE sifted::core sifted_options GTest::gtest_main)
+target_link_libraries(sifted_tests PRIVATE sifted::core sifted::net sifted_options GTest::gtest_main)
 target_compile_definitions(sifted_tests PRIVATE
   SIFTED_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 gtest_discover_tests(sifted_tests)

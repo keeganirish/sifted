@@ -1,7 +1,8 @@
-"""Named, reproducible scenarios: sensors, a target trajectory, and a seed.
+"""Named, reproducible scenarios: sensors, target trajectories, and seeds.
 
-Noise levels are those of a modest surveillance radar: 10 m range and 0.2 deg
-bearing (about 17 m cross-range at 5 km), scanning at 1 Hz.
+Single-target radar scenarios (M1). Noise levels are those of a modest
+surveillance radar: 10 m range and 0.2 deg bearing (about 17 m cross-range at
+5 km), scanning at 1 Hz.
 
     straight_crossing  Target flies outbound almost exactly along the radar's
                        +/-pi bearing seam (directly behind it) and creeps across
@@ -11,15 +12,36 @@ bearing (about 17 m cross-range at 5 km), scanning at 1 Hz.
     turn               Radar offset from the origin and rotated, so the pose
                        transform matters. Target flies east, makes a 90 deg
                        right turn at 3 deg/s (about 3 m/s^2), then flies south.
+
+Multi-target, multi-sensor scenarios (M2). One radar as above but with finite
+coverage (8 km), detection probability 0.9 and on average 0.5 clutter points
+per scan; one camera (0.1 deg, 2 Hz, offset by 0.25 s from the radar scans so
+the two interleave) at a different site, so radar range and camera bearing
+constrain the target from different directions.
+
+    crossing_pair      Two targets on straight paths crossing at a shallow
+                       30 deg angle, ~4 km from the radar; for ~10 s they are
+                       inside each other's gates, so association decides who
+                       is who. The camera here is omnidirectional and both
+                       targets cross its +/-pi bearing seam near the crossing.
+    close_pass         Two targets on reciprocal headings in lanes 120 m apart
+                       (about 5 radar cross-range sigmas at 5 km) pass each
+                       other, plus a third, manoeuvring target elsewhere.
+    enter_leave        Targets enter coverage, leave it, appear mid-run and
+                       vanish mid-run (e.g. landing), with lower detection
+                       probability (0.85), more clutter and a 6 s camera
+                       dropout. Exercises tentative -> confirmed -> coasting ->
+                       dropped.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .camera import CameraParams
 from .radar import RadarParams
-from .trajectory import Straight, TargetState, Trajectory, Turn
+from .trajectory import Straight, Target, TargetState, Trajectory, Turn
 
 SIGMA_RANGE_M = 10.0
 SIGMA_BEARING_RAD = math.radians(0.2)
@@ -32,6 +54,26 @@ class Scenario:
     radar: RadarParams
     trajectory: Trajectory
     start_ns: int = 0
+
+
+@dataclass(frozen=True)
+class MultiScenario:
+    """Several targets observed by several sensors.
+
+    Truth is reported every 1/truth_rate_hz seconds for every target that
+    exists, flagged `covered` when it lies inside the coverage of at least one
+    radar (the sensors that can start and hold a track), i.e. when the
+    tracker is expected to hold it.
+    """
+
+    name: str
+    radars: list[RadarParams]
+    cameras: list[CameraParams]
+    targets: list[Target]
+    duration_s: float
+    start_ns: int = 0
+    truth_rate_hz: float = 1.0
+    notes: list[str] = field(default_factory=list)
 
 
 def straight_crossing() -> Scenario:
@@ -51,4 +93,74 @@ def turn() -> Scenario:
     return Scenario("turn", radar, traj, start_ns=1_700_000_000 * 1_000_000_000)
 
 
+def _radar(sensor_id: int, seed: int, **kw) -> RadarParams:
+    base = dict(x_m=0.0, y_m=0.0, yaw_rad=0.0, sigma_range_m=SIGMA_RANGE_M,
+                sigma_bearing_rad=SIGMA_BEARING_RAD, rate_hz=RATE_HZ, max_range_m=8000.0,
+                p_detect=0.9, clutter_per_scan=0.5)
+    base.update(kw)
+    return RadarParams(sensor_id=sensor_id, seed=seed, **base)
+
+
+def _camera(sensor_id: int, seed: int, **kw) -> CameraParams:
+    base = dict(x_m=-3000.0, y_m=3000.0, yaw_rad=-math.pi / 4,
+                sigma_bearing_rad=math.radians(0.1), rate_hz=2.0, fov_rad=math.radians(120.0),
+                max_range_m=12000.0, p_detect=0.95, phase_s=0.25)
+    base.update(kw)
+    return CameraParams(sensor_id=sensor_id, seed=seed, **base)
+
+
+def _straight_from(x: float, y: float, heading_deg: float, speed: float, duration: float) -> Trajectory:
+    h = math.radians(heading_deg)
+    return Trajectory(TargetState(x, y, speed * math.cos(h), speed * math.sin(h)), [Straight(duration)])
+
+
+def crossing_pair() -> MultiScenario:
+    # Both pass through (3000, 2500) at t = 45 s, 30 deg apart.
+    cx, cy, t_x, v = 3000.0, 2500.0, 45.0, 70.0
+    targets = []
+    for tid, heading in ((1, 15.0), (2, -15.0)):
+        h = math.radians(heading)
+        x0, y0 = cx - v * math.cos(h) * t_x, cy - v * math.sin(h) * t_x
+        targets.append(Target(tid, _straight_from(x0, y0, heading, v, 90.0)))
+    # An omnidirectional bearing sensor whose +/-pi seam (directly behind its
+    # boresight) passes through the crossing point, so both targets cross the
+    # seam while their tracks are close: the camera's wrapped innovation is
+    # exercised exactly where association is hardest.
+    cam_x, cam_y = -3000.0, 3000.0
+    yaw = math.atan2(cy - cam_y, cx - cam_x) + math.pi
+    camera = _camera(20, 3102, x_m=cam_x, y_m=cam_y, yaw_rad=math.remainder(yaw, 2 * math.pi),
+                     fov_rad=2 * math.pi)
+    return MultiScenario("crossing_pair", [_radar(10, 3101)], [camera], targets, 90.0)
+
+
+def close_pass() -> MultiScenario:
+    lane = 120.0
+    targets = [
+        Target(1, _straight_from(-1500.0, 5000.0, 0.0, 60.0, 90.0)),
+        Target(2, _straight_from(3900.0, 5000.0 + lane, 180.0, 60.0, 90.0)),
+        Target(3, Trajectory(TargetState(-4000.0, -2500.0, 0.0, 80.0),
+                             [Straight(25.0), Turn(30.0, -math.radians(3.0)), Straight(35.0)])),
+    ]
+    camera = _camera(21, 4102, x_m=-3000.0, y_m=0.0, yaw_rad=0.6)  # looks at the lanes
+    return MultiScenario("close_pass", [_radar(11, 4101)], [camera], targets, 90.0,
+                         start_ns=1_700_000_000 * 1_000_000_000)
+
+
+def enter_leave() -> MultiScenario:
+    radar = _radar(12, 5101, max_range_m=6000.0, p_detect=0.85, clutter_per_scan=1.0)
+    camera = _camera(22, 5102, dropouts=((40.0, 46.0),))
+    targets = [
+        # Inbound from outside coverage: enters at ~6 km around t = 14 s.
+        Target(1, _straight_from(7000.0, 1000.0, 180.0, 70.0, 120.0)),
+        # Outbound: leaves coverage around t = 60 s.
+        Target(2, _straight_from(-1000.0, -2000.0, -100.0, 70.0, 120.0)),
+        # Appears at t = 30 s (e.g. take-off) inside coverage.
+        Target(3, _straight_from(-3000.0, 2000.0, 20.0, 50.0, 90.0), start_s=30.0),
+        # Vanishes at t = 70 s (e.g. landing) inside coverage.
+        Target(4, _straight_from(1500.0, 4500.0, -90.0, 40.0, 70.0)),
+    ]
+    return MultiScenario("enter_leave", [radar], [camera], targets, 120.0)
+
+
 SCENARIOS = {s.__name__: s for s in (straight_crossing, turn)}
+MULTI_SCENARIOS = {s.__name__: s for s in (crossing_pair, close_pass, enter_leave)}

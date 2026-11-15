@@ -1,9 +1,11 @@
 #pragma once
 
 #include <Eigen/Core>
+#include <optional>
 
 #include "sifted/core/sensor.hpp"
 #include "sifted/estimation/cv_filter.hpp"
+#include "sifted/estimation/linearized.hpp"
 
 // Range-bearing measurement model for the extended Kalman filter.
 //
@@ -48,6 +50,14 @@ struct LocalPosition {
 };
 LocalPosition range_bearing_to_local(const RangeBearing& z, const RangeBearing& sigma,
                                      const SensorPose& pose) noexcept;
+
+// Innovation (bearing wrapped), Jacobian and noise for a range-bearing
+// measurement `z` with 1-sigma noise `sigma`, linearised at `x`. nullopt for
+// non-finite or negative input, non-positive sigmas, or a predicted range under
+// kMinRangeForUpdateM.
+std::optional<Linearized<2>> range_bearing_innovation(const StateVector& x, const SensorPose& pose,
+                                                      const RangeBearing& z,
+                                                      const RangeBearing& sigma) noexcept;
 
 // EKF update of `filter` with a range-bearing measurement `z` whose 1-sigma
 // noise is `sigma`. The bearing innovation is wrapped, so a measurement just

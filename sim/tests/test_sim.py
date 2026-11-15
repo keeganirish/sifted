@@ -3,8 +3,8 @@ import pathlib
 import struct
 import unittest
 
-from sifted_sim import generate, radar, scenarios, sensors, wire
-from sifted_sim.trajectory import Straight, TargetState, Trajectory, Turn
+from sifted_sim import camera, generate, radar, scenarios, sensors, wire
+from sifted_sim.trajectory import Straight, Target, TargetState, Trajectory, Turn
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "scenarios"
 
@@ -96,15 +96,121 @@ class SensorTableTest(unittest.TestCase):
             sensors.parse_table("sensor 1 range_bearing 0 0 0\n")
 
 
+def _still(tid: int, x: float, y: float, duration: float = 20.0, start: float = 0.0) -> Target:
+    return Target(tid, Trajectory(TargetState(x, y, 0.0, 0.0), [Straight(duration)]), start)
+
+
+class MultiTargetRadarTest(unittest.TestCase):
+    def params(self, **kw) -> radar.RadarParams:
+        base = dict(sensor_id=1, x_m=0.0, y_m=0.0, yaw_rad=0.0, sigma_range_m=10.0,
+                    sigma_bearing_rad=0.003, rate_hz=1.0, seed=9)
+        base.update(kw)
+        return radar.RadarParams(**base)
+
+    def test_scan_reports_in_bearing_order_not_target_order(self) -> None:
+        targets = [_still(1, 0.0, 3000.0), _still(2, 3000.0, 0.0)]  # bearings pi/2, 0
+        dets = radar.observe_targets(self.params(), targets, 0.0)
+        self.assertEqual([d.target_id for d in dets], [2, 1])
+        self.assertEqual([d.measurement.seq for d in dets], [0, 1])
+
+    def test_coverage_lifetime_and_dropouts(self) -> None:
+        targets = [_still(1, 3000.0, 0.0), _still(2, 9000.0, 0.0), _still(3, 0.0, 3000.0, 5.0, 10.0)]
+        dets = radar.observe_targets(self.params(max_range_m=8000.0, dropouts=((3.0, 5.0),)),
+                                     targets, 19.0)
+        times = {d.measurement.time_ns // radar.NS_PER_S for d in dets}
+        self.assertNotIn(3, times)
+        self.assertNotIn(4, times)
+        self.assertNotIn(2, {d.target_id for d in dets})  # out of range
+        t3 = sorted(d.measurement.time_ns // radar.NS_PER_S for d in dets if d.target_id == 3)
+        self.assertEqual((t3[0], t3[-1]), (10, 15))  # exists only from 10 s to 15 s
+
+    def test_detection_probability_and_clutter_statistics(self) -> None:
+        p = self.params(max_range_m=5000.0, p_detect=0.8, clutter_per_scan=2.0)
+        dets = radar.observe_targets(p, [_still(1, 3000.0, 0.0, 2000.0)], 1999.0)
+        hits = sum(d.target_id == 1 for d in dets)
+        clutter = [d for d in dets if d.target_id is None]
+        self.assertLess(abs(hits / 2000 - 0.8), 0.03)
+        self.assertLess(abs(len(clutter) / 2000 - 2.0), 0.1)
+        self.assertTrue(all(d.measurement.z[0] <= 5000.0 + 1e-9 for d in clutter))
+
+    def test_failure_modes_do_not_change_the_noise_of_remaining_detections(self) -> None:
+        tgt = [_still(1, 3000.0, 0.0)]
+        full = radar.observe_targets(self.params(), tgt, 19.0)
+        lossy = radar.observe_targets(self.params(p_detect=0.5), tgt, 19.0)
+        by_time = {d.measurement.time_ns: d.measurement.z for d in full}
+        self.assertTrue(lossy and len(lossy) < len(full))
+        for d in lossy:
+            self.assertEqual(d.measurement.z, by_time[d.measurement.time_ns])
+
+
+class CameraTest(unittest.TestCase):
+    def params(self, **kw) -> camera.CameraParams:
+        base = dict(sensor_id=5, x_m=100.0, y_m=-200.0, yaw_rad=0.4,
+                    sigma_bearing_rad=math.radians(0.1), rate_hz=2.0, seed=77)
+        base.update(kw)
+        return camera.CameraParams(**base)
+
+    def test_bearing_model_and_noise(self) -> None:
+        p = self.params()
+        tgt = [_still(1, 3100.0, 2800.0, 500.0)]  # 45 deg from the camera
+        dets = camera.observe_targets(p, tgt, 500.0)
+        self.assertEqual(len(dets), 1001)  # 2 Hz, both ends
+        err = [radar.wrap_angle(d.measurement.z[0] - (math.pi / 4 - 0.4)) for d in dets]
+        rms = math.sqrt(sum(e * e for e in err) / len(err))
+        self.assertLess(abs(rms - p.sigma_bearing_rad) / p.sigma_bearing_rad, 0.1)
+        m = dets[0].measurement
+        self.assertEqual((m.kind, m.z[1:], m.sigma[1:]), (wire.BEARING_ONLY, (0.0, 0.0), (0.0, 0.0)))
+
+    def test_field_of_view_phase_and_dropout(self) -> None:
+        p = self.params(yaw_rad=0.0, fov_rad=math.radians(90.0), phase_s=0.25, dropouts=((2.0, 3.0),))
+        tgt = [_still(1, 3000.0, 0.0), _still(2, -3000.0, 0.0)]  # ahead, behind
+        dets = camera.observe_targets(p, tgt, 5.0)
+        self.assertEqual({d.target_id for d in dets}, {1})
+        times = [d.measurement.time_ns for d in dets]
+        self.assertEqual(times[0], 250_000_000)
+        self.assertFalse(any(2_000_000_000 <= t < 3_000_000_000 for t in times))
+
+    def test_rejects_bad_parameters(self) -> None:
+        with self.assertRaises(ValueError):
+            self.params(sigma_bearing_rad=0.0)
+        with self.assertRaises(ValueError):
+            self.params(phase_s=0.6)  # longer than the 0.5 s frame period
+
+
 class GenerateTest(unittest.TestCase):
     def test_render_is_deterministic(self) -> None:
-        for make in scenarios.SCENARIOS.values():
+        for make in list(scenarios.SCENARIOS.values()) + list(scenarios.MULTI_SCENARIOS.values()):
             self.assertEqual(generate.render(make()), generate.render(make()))
+
+    def test_multi_scenario_frames_are_time_ordered_and_truth_is_layout_2(self) -> None:
+        for name, make in scenarios.MULTI_SCENARIOS.items():
+            with self.subTest(scenario=name):
+                out = generate.render(make())
+                frames = [decode(bytes.fromhex(h)) for h in out["frames.hex"].split()]
+                times = [m.time_ns for m in frames]
+                self.assertEqual(times, sorted(times))
+                self.assertEqual({m.kind for m in frames}, {wire.RANGE_BEARING, wire.BEARING_ONLY})
+                lines = out["truth.csv"].splitlines()
+                self.assertEqual(lines[0], generate.TRUTH_HEADER_V2)
+                self.assertTrue(lines[0].startswith(generate.TRUTH_HEADER_V1))
+                ids = {int(row.split(",")[5]) for row in lines[1:]}
+                self.assertGreaterEqual(len(ids), 2)
+
+    def test_enter_leave_exercises_coverage_changes(self) -> None:
+        rows = generate.render(scenarios.enter_leave())["truth.csv"].splitlines()[1:]
+        covered: dict[int, list[int]] = {}
+        for row in rows:
+            f = row.split(",")
+            covered.setdefault(int(f[5]), []).append(int(f[6]))
+        self.assertEqual(covered[1][0], 0)   # starts outside, enters
+        self.assertEqual(covered[1][-1], 1)
+        self.assertEqual(covered[2][0], 1)   # starts inside, leaves
+        self.assertEqual(covered[2][-1], 0)
 
     def test_committed_fixtures_match_generator(self) -> None:
         # Bytes can differ across platforms in the last ulp (libm sin/cos/atan2),
         # so compare decoded values with a tight tolerance rather than bytes.
-        for name, make in scenarios.SCENARIOS.items():
+        for name, make in {**scenarios.SCENARIOS, **scenarios.MULTI_SCENARIOS}.items():
             with self.subTest(scenario=name):
                 fresh = generate.render(make())
                 d = FIXTURES / name

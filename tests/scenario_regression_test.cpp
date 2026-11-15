@@ -19,6 +19,10 @@
 // wrong pose transform, bad dt) fails loudly. The first kBurnInSeconds are
 // excluded: the track starts from one fix with an unknown velocity.
 //
+// M2: the engine is now multi-target; with one target it must create exactly
+// one track, and scoring uses the track each measurement updated. The numbers
+// are unchanged from M1 (same filter, every measurement gated in).
+//
 // Baseline when the bounds were set (GCC 13, default EngineConfig, q = 4):
 //   straight_crossing  filtered 11.1 m vs raw 22.2 m (0.50), velocity 2.4 m/s
 //   turn               filtered 10.7 m vs raw 14.9 m (0.72), velocity 5.3 m/s
@@ -132,6 +136,7 @@ struct Score {
   double velocity_rmse = 0.0;
   std::size_t scored = 0;
   std::vector<TrackEstimate> estimates;  // one per frame, for determinism checks
+  std::uint64_t tracks_started = 0;
 };
 
 Score run(const Scenario& sc) {
@@ -152,10 +157,11 @@ Score run(const Scenario& sc) {
     const TruthRow& t = sc.truth[i];
     EXPECT_EQ(m.time.ns, t.time_ns) << "frame " << i;
 
-    const MeasurementOutcome o = engine.on_measurement(m);
-    EXPECT_TRUE(o == MeasurementOutcome::Initialized || o == MeasurementOutcome::Updated)
-        << "frame " << i << ": " << to_string(o);
-    const auto est = engine.track();
+    const MeasurementResult r = engine.on_measurement_result(m);
+    EXPECT_TRUE(r.outcome == MeasurementOutcome::Initialized ||
+                r.outcome == MeasurementOutcome::Updated)
+        << "frame " << i << ": " << to_string(r.outcome);
+    const auto est = engine.track(r.track);
     if (!est) {
       continue;
     }
@@ -173,6 +179,7 @@ Score run(const Scenario& sc) {
     sum_v += std::pow(est->state(2) - t.vx, 2) + std::pow(est->state(3) - t.vy, 2);
     ++s.scored;
   }
+  s.tracks_started = engine.tracks_started();
   if (s.scored > 0) {
     const auto n = static_cast<double>(s.scored);
     s.filtered_rmse = std::sqrt(sum_f / n);
@@ -193,6 +200,8 @@ void check(const std::string& name, const Bounds& b) {
   ASSERT_FALSE(sc.frames.empty());
   const Score s = run(sc);
   ASSERT_GT(s.scored, 50U);
+  // One target, one sensor, no clutter: association must never split it.
+  EXPECT_EQ(s.tracks_started, 1U);
   std::printf(
       "[ scenario ] %s: filtered %.2f m, raw %.2f m (ratio %.3f), velocity %.2f m/s, n=%zu\n",
       name.c_str(), s.filtered_rmse, s.raw_rmse, s.filtered_rmse / s.raw_rmse, s.velocity_rmse,
