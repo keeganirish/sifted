@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Starts the demo pieces in order (docs/demo.md): daemon, impairment proxy,
 # sender; then waits, stops everything and checks the replay is identical.
-# Open web/index.html in a browser before or right after starting this.
+# Serve the map first, (cd web && python3 -m http.server 8000), and open
+# http://localhost:8000/. (The app, ./sifted, runs the same demo with one click.)
 #
 #   scripts/demo.sh [build/release/src/apps/sifted_fusiond] [speed]
 set -euo pipefail
@@ -26,7 +27,7 @@ sleep 0.5
     --outage "$OUT_A:$OUT_B" --duration "$DURATION") &
 PROXY=$!
 sleep 0.3
-echo "demo: map: open web/index.html; outage at scenario time 70-78 s" >&2
+echo "demo: map: http://localhost:8000/ (cd web && python3 -m http.server 8000); outage at scenario time 70-78 s" >&2
 (cd sim && python3 -m sifted_sim.send demo --target 127.0.0.1:5601 --speed "$SPEED")
 wait $PROXY
 sleep 1

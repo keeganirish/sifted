@@ -8,6 +8,11 @@ Everything runs on one machine. You need four terminals (or use
 `scripts/demo.sh`, which starts the pieces in order and leaves the map and
 the narration to you) and a browser.
 
+> The app does the same with one click: start Sifted (`./sifted`), choose
+> **Guided demo**, network **Lossy + outage**, and press **Run scenario**; the
+> side panel narrates the table in section 5 as it happens. This runbook is the
+> manual version, with every process in its own terminal.
+
 ## 0. Build once
 
 ```bash
@@ -33,8 +38,15 @@ It prints `track snapshots on ws://127.0.0.1:8765/`. Defaults in effect:
 
 ## 2. Open the map (browser)
 
-Open `web/index.html` (double-click, or `file:///.../web/index.html`). It
-connects to `ws://localhost:8765/`. Nothing is shown until tracks exist.
+Serve the map and open <http://localhost:8000/>:
+
+```bash
+(cd web && python3 -m http.server 8000) &
+```
+
+Not `file://`: OpenStreetMap refuses tile requests without a Referer, so every
+tile would show "403 Access blocked". The page connects to
+`ws://localhost:8765/`. Nothing is shown until tracks exist.
 
 ## 3. Start the impairment proxy (terminal 2)
 

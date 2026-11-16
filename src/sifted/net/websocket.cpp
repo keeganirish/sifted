@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "sifted/net/sha1.hpp"
+#include "sifted/net/socket_compat.hpp"
 
 namespace sifted::net {
 namespace {
@@ -190,7 +191,7 @@ Result<std::unique_ptr<WebSocketServer>, std::string> WebSocketServer::start(
   if (inet_pton(AF_INET, cfg.bind_address.c_str(), &addr.sin_addr) != 1) {
     return std::string("invalid IPv4 address: ") + cfg.bind_address;
   }
-  const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  const int fd = compat::open_socket(AF_INET, SOCK_STREAM);
   if (fd < 0) {
     return std::string("socket: ") + std::strerror(errno);
   }
@@ -276,7 +277,7 @@ void WebSocketServer::loop() {
     }
     if ((fds[1].revents & POLLIN) != 0) {
       while (true) {
-        const int cfd = ::accept4(listen_fd_, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        const int cfd = compat::accept_nonblocking(listen_fd_);
         if (cfd < 0) {
           break;
         }
@@ -387,7 +388,7 @@ void WebSocketServer::loop() {
       }
       if (c.out_off < c.out.size()) {
         const ssize_t n =
-            ::send(c.fd, c.out.data() + c.out_off, c.out.size() - c.out_off, MSG_NOSIGNAL);
+            compat::send_nosignal(c.fd, c.out.data() + c.out_off, c.out.size() - c.out_off);
         if (n > 0) {
           c.out_off += static_cast<std::size_t>(n);
           c.last_progress_ms = now;

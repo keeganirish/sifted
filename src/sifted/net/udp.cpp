@@ -11,6 +11,8 @@
 #include <span>
 #include <utility>
 
+#include "sifted/net/socket_compat.hpp"
+
 namespace sifted::net {
 
 Result<UdpReceiver, std::string> UdpReceiver::bind(const std::string& address, std::uint16_t port) {
@@ -20,7 +22,7 @@ Result<UdpReceiver, std::string> UdpReceiver::bind(const std::string& address, s
   if (inet_pton(AF_INET, address.c_str(), &addr.sin_addr) != 1) {
     return std::string("invalid IPv4 address: ") + address;
   }
-  const int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+  const int fd = compat::open_socket(AF_INET, SOCK_DGRAM);
   if (fd < 0) {
     return std::string("socket: ") + std::strerror(errno);
   }

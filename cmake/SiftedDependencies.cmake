@@ -11,6 +11,10 @@ if(NOT Eigen3_FOUND AND SIFTED_FETCH_DEPS)
   set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(eigen)
+  # Treat the downloaded headers like a system install (-isystem), so the
+  # project's strict warnings (and -Werror) apply only to code we own.
+  get_target_property(_eigen_inc eigen INTERFACE_INCLUDE_DIRECTORIES)
+  set_target_properties(eigen PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_eigen_inc}")
 elseif(NOT Eigen3_FOUND)
   message(FATAL_ERROR
     "Eigen 3.4+ not found. Install it (e.g. 'apt install libeigen3-dev') "

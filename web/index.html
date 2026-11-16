@@ -3,163 +3,231 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sifted operator view</title>
-  <!-- Leaflet 1.9.4 from unpkg; map tiles from OpenStreetMap (internet access needed for both). -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <style>
-    html, body { margin: 0; height: 100%; font: 13px/1.4 system-ui, sans-serif; }
-    #app { display: flex; height: 100%; }
-    #map { flex: 1; }
-    #side { width: 300px; overflow-y: auto; border-left: 1px solid #ccc; padding: 8px 10px; box-sizing: border-box; }
-    h1 { font-size: 16px; margin: 0 0 4px; }
-    #status { margin-bottom: 8px; color: #555; }
-    #status.ok::before { content: "\25CF "; color: #2a8a2a; }
-    #status.bad::before { content: "\25CF "; color: #c33; }
-    table { border-collapse: collapse; width: 100%; }
-    td, th { text-align: left; padding: 2px 4px; border-bottom: 1px solid #eee; white-space: nowrap; }
-    tr.tentative { color: #999; }
-    tr.coasting { font-style: italic; }
-    tr:hover { background: #f4f4f4; cursor: pointer; }
-    .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin: 0 3px 0 8px; }
-    label { display: block; margin: 6px 0; }
-  </style>
+  <title>Sifted</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <!-- Leaflet 1.9.4 is bundled (vendor/leaflet, BSD-2-Clause); map tiles come from
+       OpenStreetMap and need internet access. Tracks work without it. -->
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="assets/app.css">
+  <script src="vendor/leaflet/leaflet.js"></script>
 </head>
 <body>
-<div id="app">
-  <div id="map"></div>
-  <div id="side">
-    <h1>Sifted</h1>
-    <div id="status" class="bad">connecting...</div>
-    <div class="legend">
-      <span style="background:#1f6fd1"></span>confirmed
-      <span style="background:#e08a00"></span>coasting
-      <span style="background:#aaa"></span>tentative
+<header class="topbar">
+  <div class="brand">
+    <img src="assets/icon.svg" alt="" width="28" height="28">
+    <div>
+      <div class="brand-name">Sifted</div>
+      <div class="brand-sub">Multi-Sensor Track Fusion</div>
     </div>
-    <label><input type="checkbox" id="showTentative"> show tentative tracks</label>
-    <label><input type="checkbox" id="follow" checked> fit map to tracks on first data</label>
-    <table>
-      <thead><tr><th>id</th><th>state</th><th>&sigma; [m]</th><th>sensors</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <p style="color:#777">Circles show the 1-&sigma; position uncertainty; lines show
-      where each track will be in 30 s at its current velocity. Positions are converted
-      from the tracking frame to latitude/longitude by the daemon, using the run's
-      tangent-plane origin (<code>--origin</code>).</p>
+  </div>
+  <div class="session" id="session" aria-live="polite">
+    <span class="dot" id="sessionDot"></span>
+    <span id="sessionText">Starting…</span>
+    <div class="progress" id="sessionProgress" hidden><div></div></div>
+    <button class="btn btn-ghost btn-sm" id="stopBtn" hidden title="Stop what is running">Stop</button>
+  </div>
+  <div class="topbar-actions">
+    <span class="conn" id="conn" title="Connection to the fusion service's track stream">
+      <span class="dot"></span><span id="connText">offline</span>
+    </span>
+    <button class="icon-btn" id="helpBtn" title="How Sifted works" aria-label="Help">?</button>
+    <button class="icon-btn" id="quitBtn" title="Quit Sifted (stops everything)" aria-label="Quit" hidden>
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <nav class="tabs" role="tablist">
+      <button role="tab" class="tab active" data-tab="run" id="tabRunBtn">Run</button>
+      <button role="tab" class="tab" data-tab="tracks">Tracks <span class="count" id="trackCount">0</span></button>
+      <button role="tab" class="tab" data-tab="recordings" id="tabRecBtn">Recordings</button>
+    </nav>
+
+    <!-- Run ------------------------------------------------------------------>
+    <section class="panel" id="tab-run" role="tabpanel">
+      <div id="standalone" class="card info" hidden>
+        <h3>Connected Straight to a Daemon</h3>
+        <p>This page is showing the track stream at <code id="wsUrlText"></code>. Start the
+          daemon and simulators yourself (see the README), or launch Sifted with
+          <code>./sifted</code> (or the Sifted shortcut) to run scenarios from here.</p>
+      </div>
+
+      <div id="notBuilt" class="card error" hidden>
+        <h3>The Fusion Service Isn't Built Yet</h3>
+        <p>Run the installer (<code>./install.sh</code>, or <code>install.cmd</code> on Windows),
+          then start Sifted again.</p>
+      </div>
+
+      <div id="setup">
+        <h2 class="section-title">1 · Choose a Scenario</h2>
+        <div class="scenario-list" id="scenarioList" role="radiogroup" aria-label="Scenario">
+          <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+        </div>
+
+        <h2 class="section-title">2 · Set the Conditions</h2>
+        <div class="field">
+          <label class="field-label">Playback Speed</label>
+          <div class="segmented" id="speedSeg" role="radiogroup" aria-label="Speed">
+            <button data-v="1" class="on">1×</button><button data-v="2">2×</button>
+            <button data-v="5">5×</button><button data-v="10">10×</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="networkSel">Network</label>
+          <select id="networkSel"></select>
+          <div class="hint" id="networkHint"></div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="faultSel">Sensor Fault</label>
+          <select id="faultSel"></select>
+          <div class="hint" id="faultHint"></div>
+        </div>
+
+        <button class="btn btn-primary btn-block" id="runBtn">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg>
+          Run Scenario
+        </button>
+
+        <details class="card adsb" id="adsbCard">
+          <summary>
+            <span>Live Aircraft (ADS-B)</span><span class="badge">Needs Internet</span>
+          </summary>
+          <p class="muted">Track real aircraft from the OpenSky Network's public feed. Without an
+            OpenSky account the free quota allows one update every few minutes; set
+            <code>OPENSKY_CLIENT_ID</code> and <code>OPENSKY_CLIENT_SECRET</code> before starting
+            Sifted for one every ~20 s.</p>
+          <div class="bbox">
+            <label>South<input type="number" step="0.1" id="bS"></label>
+            <label>North<input type="number" step="0.1" id="bN"></label>
+            <label>West<input type="number" step="0.1" id="bW"></label>
+            <label>East<input type="number" step="0.1" id="bE"></label>
+          </div>
+          <div class="row">
+            <button class="btn btn-ghost btn-sm" id="bboxFromMap" title="Use the area currently shown on the map">Use Map Area</button>
+            <button class="btn btn-secondary btn-sm" id="adsbBtn">Start Live Feed</button>
+          </div>
+        </details>
+      </div>
+
+      <div id="active" hidden>
+        <div class="card now">
+          <div class="now-head">
+            <div>
+              <div class="eyebrow" id="nowKind">Running</div>
+              <h3 id="nowTitle"></h3>
+            </div>
+            <span class="badge" id="nowBadge"></span>
+          </div>
+          <div class="progress big" id="nowProgress"><div></div></div>
+          <div class="now-meta" id="nowMeta"></div>
+          <div class="chips" id="nowChips"></div>
+          <div class="row">
+            <button class="btn btn-secondary btn-sm" id="nowReplay" hidden>Replay on Map</button>
+            <button class="btn btn-secondary btn-sm" id="nowVerify" hidden>Verify Replay</button>
+            <button class="btn btn-danger btn-sm" id="nowStop">Stop</button>
+            <button class="btn btn-primary btn-sm" id="nowNew" hidden>New Run</button>
+          </div>
+          <div class="verify-result" id="nowVerifyResult" hidden></div>
+        </div>
+
+        <h2 class="section-title">What to Watch</h2>
+        <ol class="watch" id="watchList"></ol>
+
+        <h2 class="section-title">Fusion Service</h2>
+        <div class="stats" id="statsGrid"></div>
+      </div>
+    </section>
+
+    <!-- Tracks --------------------------------------------------------------->
+    <section class="panel" id="tab-tracks" role="tabpanel" hidden>
+      <div class="toggles">
+        <label class="switch"><input type="checkbox" id="showTentative"><span></span>Show Tentative Tracks</label>
+        <label class="switch"><input type="checkbox" id="follow" checked><span></span>Zoom to Tracks When They First Appear</label>
+      </div>
+      <table class="tracks">
+        <thead><tr><th>Track</th><th>State</th><th title="1-sigma position uncertainty">σ (m)</th><th title="Ground speed">Speed</th><th>Sensors</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="tracksEmpty">
+        <p>No Tracks Yet</p>
+        <p class="muted">Tracks appear here once the fusion service confirms them. Click a row to find it on the map.</p>
+      </div>
+      <p class="muted small">Circles show each track's 1-σ position uncertainty; lines show where it
+        will be in 30 s at its current velocity. Dashed means coasting: no recent measurements, so
+        the position is predicted.</p>
+    </section>
+
+    <!-- Recordings ----------------------------------------------------------->
+    <section class="panel" id="tab-recordings" role="tabpanel" hidden>
+      <p class="muted">Every run is recorded. Replaying a recording feeds the same inputs through the
+        same engine, so the output must be <strong>bit-for-bit identical</strong>: that's what
+        <em>Verify</em> checks.</p>
+      <div class="field inline">
+        <label class="field-label" for="paceSel">Replay Speed</label>
+        <select id="paceSel"><option value="1">1×</option><option value="2">2×</option><option value="5" selected>5×</option><option value="10">10×</option></select>
+      </div>
+      <div id="runList" class="run-list"></div>
+      <div class="empty" id="runsEmpty" hidden>
+        <p>No Recordings Yet</p>
+        <p class="muted">Run a scenario and it will show up here.</p>
+      </div>
+    </section>
+
+    <details class="activity" id="activity">
+      <summary>Activity Log <span class="count" id="logCount">0</span></summary>
+      <div class="log" id="log"></div>
+    </details>
+  </aside>
+
+  <div class="map-wrap">
+    <div id="map" aria-label="Track map"></div>
+    <div class="overlay" id="overlay" hidden>
+      <div class="overlay-card">
+        <div class="spinner" id="overlaySpin" hidden></div>
+        <h3 id="overlayTitle"></h3>
+        <p id="overlayText"></p>
+        <button class="btn btn-primary" id="overlayBtn" hidden>Run the Guided Demo</button>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i style="--c:var(--confirmed)"></i>Confirmed</span>
+      <span><i class="dashed" style="--c:var(--coasting)"></i>Coasting</span>
+      <span><i style="--c:var(--tentative)"></i>Tentative</span>
+      <span><i class="ring"></i>Uncertainty</span>
+    </div>
+    <div class="map-tools">
+      <button class="btn btn-ghost btn-sm" id="fitBtn" title="Zoom to all tracks">Fit Tracks</button>
+      <button class="btn btn-ghost btn-sm" id="themeBtn" title="Switch map style">Light Map</button>
+    </div>
+    <div class="map-note" id="mapNote" hidden>Map tiles couldn't load (offline?). Tracks are still shown.</div>
+  </div>
+</main>
+
+<!-- Welcome / help -------------------------------------------------------------->
+<div class="modal" id="welcome" hidden role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+  <div class="modal-card">
+    <img src="assets/icon.svg" alt="" width="44" height="44">
+    <h2 id="welcomeTitle">Welcome to Sifted</h2>
+    <p>Sifted fuses noisy measurements from several sensors into one picture of what is out
+      there. It decides which measurements belong to which object, estimates where each object
+      is going, and shows how sure it is.</p>
+    <ol class="steps">
+      <li><strong>Pick a scenario</strong> of simulated aircraft, radar and camera, and press <em>Run</em>.</li>
+      <li><strong>Watch the map.</strong> Each dot is a track; the circle is its uncertainty, the line its heading.</li>
+      <li><strong>Break things.</strong> Add packet loss, an outage or a failing sensor, and see the tracker cope.</li>
+      <li><strong>Replay</strong> any run from its recording and verify the output is bit-for-bit identical.</li>
+    </ol>
+    <div class="row end">
+      <button class="btn btn-ghost" id="welcomeClose">Explore on My Own</button>
+      <button class="btn btn-primary" id="welcomeDemo">Run the Guided Demo</button>
+    </div>
   </div>
 </div>
-<script>
-"use strict";
-// Read-only client for sifted_fusiond's track snapshots (JSON, "sifted.tracks" v1;
-// see src/sifted/net/snapshot.hpp). It never sends anything to the server.
-//   index.html?ws=ws://host:port/   (default ws://localhost:8765/)
-const params = new URLSearchParams(location.search);
-const WS_URL = params.get("ws") || "ws://localhost:8765/";
-const LEADER_S = 30;
-const COLORS = { confirmed: "#1f6fd1", coasting: "#e08a00", tentative: "#aaa" };
 
-const map = L.map("map").setView([51.4779, -0.0015], 11);
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  attribution: "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors",
-}).addTo(map);
+<div class="toasts" id="toasts" aria-live="polite"></div>
 
-const layers = new Map();  // track id -> {dot, ring, leader}
-let fitted = false;
-const statusEl = document.getElementById("status");
-const rowsEl = document.getElementById("rows");
-const showTentative = document.getElementById("showTentative");
-
-function setStatus(text, ok) {
-  statusEl.textContent = text;
-  statusEl.className = ok ? "ok" : "bad";
-}
-
-// Offset (east, north) metres from (lat, lon), small-distance approximation for display.
-function offset(lat, lon, east, north) {
-  const r = 6378137;
-  return [lat + (north / r) * 180 / Math.PI,
-          lon + (east / (r * Math.cos(lat * Math.PI / 180))) * 180 / Math.PI];
-}
-
-function escapeText(s) {
-  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
-}
-
-function render(snap) {
-  if (snap.type !== "sifted.tracks" || snap.version !== 1 || !Array.isArray(snap.tracks)) {
-    setStatus("unsupported message (expected sifted.tracks v1)", false);
-    return;
-  }
-  if (!snap.origin) {
-    setStatus("connected, but the run has no geodetic origin: nothing to place on the map", false);
-    return;
-  }
-  setStatus(`connected: ${snap.tracks.length} tracks, t = ${(snap.time_ns / 1e9).toFixed(1)} s`, true);
-  const seen = new Set();
-  const rows = [];
-  for (const t of snap.tracks) {
-    if (typeof t.lat !== "number" || typeof t.lon !== "number") continue;
-    if (t.status === "tentative" && !showTentative.checked) continue;
-    seen.add(t.id);
-    const color = COLORS[t.status] || "#000";
-    const pos = [t.lat, t.lon];
-    const end = offset(t.lat, t.lon, t.vx * LEADER_S, t.vy * LEADER_S);
-    const speed = Math.hypot(t.vx, t.vy);
-    const tip = `<b>track ${t.id}</b> (${escapeText(t.status)}${t.manoeuvring ? ", manoeuvring" : ""})<br>` +
-      `&sigma; ${t.sigma_m.toFixed(1)} m, speed ${speed.toFixed(1)} m/s<br>` +
-      `sensors: ${t.sensors.map(escapeText).join(", ")}<br>${t.updates} updates`;
-    let l = layers.get(t.id);
-    if (!l) {
-      l = {
-        ring: L.circle(pos, { radius: 1, weight: 1, fillOpacity: 0.12 }).addTo(map),
-        leader: L.polyline([pos, end], { weight: 2 }).addTo(map),
-        dot: L.circleMarker(pos, { radius: 5, weight: 1, fillOpacity: 1 }).addTo(map),
-      };
-      l.dot.bindTooltip("", { direction: "top" });
-      layers.set(t.id, l);
-    }
-    const dash = t.status === "coasting" ? "4 4" : null;
-    l.dot.setLatLng(pos).setStyle({ color, fillColor: color });
-    l.dot.setTooltipContent(tip);
-    l.ring.setLatLng(pos).setRadius(Math.max(t.sigma_m, 1)).setStyle({ color, fillColor: color, dashArray: dash });
-    l.leader.setLatLngs([pos, end]).setStyle({ color, dashArray: dash });
-    rows.push(`<tr class="${escapeText(t.status)}" data-id="${t.id}"><td>${t.id}</td><td>${escapeText(t.status)}` +
-      `${t.manoeuvring ? " &#8635;" : ""}</td><td>${t.sigma_m.toFixed(1)}</td><td>${t.sensors.map(escapeText).join(",")}</td></tr>`);
-  }
-  for (const [id, l] of layers) {  // tracks that disappeared (dropped or filtered)
-    if (!seen.has(id)) {
-      map.removeLayer(l.dot); map.removeLayer(l.ring); map.removeLayer(l.leader);
-      layers.delete(id);
-    }
-  }
-  rowsEl.innerHTML = rows.join("");
-  if (!fitted && document.getElementById("follow").checked && layers.size > 0) {
-    map.fitBounds(L.featureGroup([...layers.values()].map(l => l.ring)).getBounds().pad(0.3));
-    fitted = true;
-  }
-}
-
-rowsEl.addEventListener("click", e => {
-  const tr = e.target.closest("tr");
-  const l = tr && layers.get(Number(tr.dataset.id));
-  if (l) { map.panTo(l.dot.getLatLng()); l.dot.openTooltip(); }
-});
-
-let retry = 500;
-function connect() {
-  const ws = new WebSocket(WS_URL);
-  ws.onopen = () => { retry = 500; setStatus(`connected to ${WS_URL}, waiting for tracks`, true); };
-  ws.onmessage = ev => {
-    try { render(JSON.parse(ev.data)); } catch (err) { setStatus("bad message: " + err, false); }
-  };
-  ws.onclose = () => {
-    setStatus(`disconnected from ${WS_URL}; retrying`, false);
-    setTimeout(connect, retry);
-    retry = Math.min(retry * 2, 10000);
-  };
-}
-connect();
-</script>
+<script src="assets/app.js"></script>
 </body>
 </html>

@@ -82,6 +82,30 @@ jobs:
           name: fuzz-crashes
           path: crash-*
 
+  install:
+    # The one-step installer, run the way a new user would: on a clean runner,
+    # twice (the second run must be a no-op), then the launcher's self-check.
+    name: installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: ./install.sh --yes --no-shortcut
+      - name: Install again (idempotent)
+        run: ./install.sh --yes --no-shortcut
+      - name: Launcher self-check
+        run: ./sifted --check
+      - name: Upload the install log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-log-${{ matrix.os }}
+          path: build/install.log
+
   format:
     runs-on: ubuntu-24.04
     steps:
