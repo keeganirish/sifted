@@ -132,6 +132,35 @@ std::optional<std::string> parse_handshake(std::string_view request) {
   return key;
 }
 
+ClientFrame parse_client_frame(std::string_view buffer) {
+  ClientFrame f;
+  if (buffer.size() < 2) {
+    return f;
+  }
+  const auto b0 = static_cast<std::uint8_t>(buffer[0]);
+  const auto b1 = static_cast<std::uint8_t>(buffer[1]);
+  const std::uint8_t opcode = b0 & 0x0FU;
+  const bool masked = (b1 & 0x80U) != 0;
+  const std::size_t len = b1 & 0x7FU;
+  const bool control = opcode == 0x8 || opcode == 0x9 || opcode == 0xA;
+  if (!control || !masked || len > 125 || (b0 & 0x80U) == 0) {
+    f.kind = ClientFrame::Kind::Refused;
+    return f;
+  }
+  if (buffer.size() < 6 + len) {
+    return f;
+  }
+  f.payload.assign(buffer.substr(6, len));
+  for (std::size_t k = 0; k < len; ++k) {
+    f.payload[k] = static_cast<char>(f.payload[k] ^ buffer[2 + (k % 4)]);
+  }
+  f.consumed = 6 + len;
+  f.kind = opcode == 0x8   ? ClientFrame::Kind::Close
+           : opcode == 0x9 ? ClientFrame::Kind::Ping
+                           : ClientFrame::Kind::Pong;
+  return f;
+}
+
 std::string encode_text_frame(std::string_view payload) {
   std::string f;
   f.reserve(payload.size() + 10);
@@ -312,14 +341,12 @@ void WebSocketServer::loop() {
         }
       } else if (c.state == Client::State::Open) {
         // Client frames: control frames only, masked, <= 125 bytes payload.
-        while (c.in.size() >= 2) {
-          const auto b0 = static_cast<std::uint8_t>(c.in[0]);
-          const auto b1 = static_cast<std::uint8_t>(c.in[1]);
-          const std::uint8_t opcode = b0 & 0x0FU;
-          const bool masked = (b1 & 0x80U) != 0;
-          const std::size_t len = b1 & 0x7FU;
-          const bool control = opcode == 0x8 || opcode == 0x9 || opcode == 0xA;
-          if (!control || !masked || len > 125 || (b0 & 0x80U) == 0) {
+        while (true) {
+          const ClientFrame f = parse_client_frame(c.in);
+          if (f.kind == ClientFrame::Kind::NeedMore) {
+            break;
+          }
+          if (f.kind == ClientFrame::Kind::Refused) {
             stats_.refused_client_data.fetch_add(1);
             c.out = close_frame(1008);  // policy violation: read-only stream
             c.out_off = 0;
@@ -327,23 +354,16 @@ void WebSocketServer::loop() {
             c.in.clear();
             break;
           }
-          if (c.in.size() < 6 + len) {
-            break;
-          }
-          std::string payload = c.in.substr(6, len);
-          for (std::size_t k = 0; k < len; ++k) {
-            payload[k] = static_cast<char>(payload[k] ^ c.in[2 + (k % 4)]);
-          }
-          c.in.erase(0, 6 + len);
-          if (opcode == 0x8) {
+          c.in.erase(0, f.consumed);
+          if (f.kind == ClientFrame::Kind::Close) {
             c.out = close_frame(1000);
             c.out_off = 0;
             c.state = Client::State::Closing;
             break;
           }
-          if (opcode == 0x9 && c.out_off >= c.out.size()) {
-            c.out = std::string(1, static_cast<char>(0x8A)) + static_cast<char>(payload.size()) +
-                    payload;
+          if (f.kind == ClientFrame::Kind::Ping && c.out_off >= c.out.size()) {
+            c.out = std::string(1, static_cast<char>(0x8A)) + static_cast<char>(f.payload.size()) +
+                    f.payload;
             c.out_off = 0;
           }
         }

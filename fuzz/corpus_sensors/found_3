@@ -1,0 +1,33 @@
+
+	
+
+
+
+	sifted-sensors 1
+sensor 1122 bearing_only -30 0 0.6
+
+
+	
+	
+
+
+	
+sensor 2 range_bearing 0 -5 .0
+sensor 21 bearing_only -30 0 0.
+
+
+#
+sensor 1 range_bearing 0 -5 .5
+	
+#.0 0sors 1
+sensor 221 bearing_only 0 0 .5
+	
+#	чу	1
+sensor 96 range_bearing .2 0 0.0
+sensor 22 bearing_only -30 0 0.6
+sensor 0 range_bearing 0 0 0.0
+sensor 73 bearing_only -30 0 0
+#en
+sensor 1 range_bearing 0 -5 .5
+
+	#i#.0

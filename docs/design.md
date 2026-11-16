@@ -1,7 +1,8 @@
 # Sifted design
 
-> Status: skeleton. Sections marked **TODO** are filled in as the milestone that
-> builds them lands. Decisions are recorded in [`adr/`](adr/).
+> Status: complete through M3. Decisions are recorded in [`adr/`](adr/)
+> (0001-0011). Measured numbers come from the tests and benchmarks named next
+> to them; all were run with GCC 13 against Eigen 3.4.0 and GoogleTest 1.14.
 
 ## 1. Goals and non-goals
 
@@ -10,18 +11,33 @@ track fusion, with measured performance.
 **Non-goals:** anything involving weapons or targeting; non-public data;
 production-grade security hardening or a polished product UI.
 
-## 2. Architecture
+## 2. Architecture and threading
 
 ```
-sensors --UDP--> [net: receive + parse + validate] --queue--> [Engine: associate -> estimate -> store]
-                         |                                              |
-                         +--> event log (raw frames + receive time)     +--> WebSocket publisher --> operator map
+sensors --UDP--> [rx thread: size check -> per-source rate limit -> strict decode -> stamp recv time]
+                       |  bounded queue (drop + count when full)
+                       v
+          [engine thread: net::Pipeline]
+             decode -> dedup (seq, time) -> clock gate -> reorder stage -> scan assembly
+             -> Engine (associate -> estimate -> store) -> output lines, snapshots
+                       |                                        |
+                       +--> event log (every frame and tick,    +--> WebSocket thread --> operator map
+                            with its receive time)                   (latest snapshot only)
 ```
 
-Threading model: network threads only receive, validate, timestamp and enqueue.
-**One** engine thread consumes the queue in order. Publisher threads read
-immutable track snapshots. No shared mutable state is touched from two threads
-without a documented owner (checked by TSan in CI).
+Threads and ownership (checked by TSan on the whole test suite, including
+the live UDP flood tests with a concurrent consumer):
+
+| Thread | Owns | Shares |
+|---|---|---|
+| UDP receive (`UdpReceiver::run`) | its socket, the rate limiter table | pushes into `BoundedQueue` (mutex); increments atomic `UdpStats` |
+| engine (daemon main thread) | `Pipeline`, `Engine`, event log writer, output file | pops the queue; calls `WebSocketServer::publish` (swaps a shared pointer under a mutex) |
+| WebSocket server | all client sockets | reads the latest snapshot pointer under the mutex; atomic stats |
+
+The engine thread is the only one that touches tracker state. The receive
+thread reads the wall clock (receive stamps) and the engine thread reads it
+only to stamp quiet ticks; both values go into the event log, so replay never
+reads a clock.
 
 ## 3. Determinism contract
 
@@ -29,13 +45,28 @@ Replaying a recorded log must reproduce the original output **bit for bit**.
 Rules (enforced by review, build flags and tests):
 
 1. Time is an input. Core code takes a `Clock`/`Timestamp`; only the live app
-   edge reads the machine clock, and it records what it read.
+   edge reads the machine clock, and it records what it read. The M3 reorder
+   stage and clock gate use only *receive* times, which are recorded.
 2. The engine is single-threaded and a pure function of its ordered input.
 3. No `-ffast-math`; `-ffp-contract=off` so FMA contraction cannot differ
    between builds (see `cmake/SiftedOptions.cmake`).
 4. No iteration over address- or hash-ordered containers where order affects
    output; ties are broken by id.
 5. Timestamps and ids are integers.
+6. (M3) Every parameter that changes output is in `PipelineConfig` and in the
+   event log header (ADR 0005). Impairments, faults and benchmark workloads
+   are seeded (SplitMix64) and reproducible; the impairment model is
+   bit-identical between C++ and Python (golden fixture).
+7. (M3) Performance shortcuts must not change results: the gate screen is
+   proven conservative and checked by tests and by the engine fuzzer against
+   an engine without it.
+
+Verified: clean, impaired (loss, bursts, jitter, duplicates, outage) and
+faulted runs replay byte-identically (`EventLog.*`, `Reorder.ImpairedRecordedRunReplaysBitForBit`,
+`Faults.FaultedRunsAreDeterministic`), and a live daemon run through the
+impairment proxy with a sensor restart replayed identically (`cmp` of the
+output streams, 2 056 lines, 117 frames lost to the outage, 89 to loss, 28
+duplicates).
 
 Known limit: results are guaranteed identical for the same binary and
 architecture. Cross-compiler/cross-libm bit-equality of transcendental
@@ -45,66 +76,65 @@ functions (`sin`, `atan2`) is **not** promised; CI replays on the same build.
 
 | Dir | Responsibility | Status |
 |---|---|---|
-| `core` | types, `Clock`, `Measurement` validation, `SensorTable`, `Engine` | clock, validation, sensor table done; engine is single-track (M1) |
-| `wire` | versioned, size-limited, strict frame codec | **done** (v1, fuzzed) |
-| `estimation` | Kalman/EKF per track | **done for M1**: CV Kalman filter + range-bearing EKF update |
-| `association` | gating, assignment, track lifecycle | TODO (M1-2) |
-| `store` | track table + decision trace | TODO (M2) |
-| `replay` | event log, simulated-clock replayer | TODO (M2) |
-| `net` | UDP ingest, WebSocket publisher, degraded-network sim | TODO (M2) |
+| `core` | types, `Clock`, `Measurement` validation, `SensorTable`, multi-target `Engine` | done |
+| `wire` | versioned, size-limited, strict frame codec | done (v1, fuzzed) |
+| `estimation` | CV Kalman filter, range-bearing and bearing-only EKF models, geodetic projection, gate screen | done |
+| `association` | gating, GNN assignment (and greedy, for comparison), lifecycle | done (ADR 0004) |
+| `store` | track table, bounded decision trace, `explain()` | done |
+| `replay` | event log, simulated-clock replayer | done (ADR 0005) |
+| `net` | ingest pipeline (dedup, clock gate, reorder stage), UDP, rate limiting, queue, WebSocket, impairment model | done (ADRs 0006, 0008-0010) |
+| `apps` | `sifted_fusiond` (live and replay) | done |
+| `sim/` | simulators, scenarios, sender with fault injection, impairment proxy, OpenSky adapter | done |
+| `benchmarks/` | engine harness, end-to-end latency, report | done (ADR 0011) |
 
 ## 5. Milestones
 
 Scope is cut before polish. Each milestone ends with green CI and updated docs.
 
-- **M0 (this skeleton):** build, CI, sanitizers, fuzz harness, wire codec, docs.
-- **M1:** radar simulator with ground truth; single-sensor tracker (linear KF
-  in a local Cartesian frame, EKF for range-bearing); sensor table (ADR 0003);
-  first ground-truth regression scenarios (RMSE bound). *Implemented.* The
-  camera (bearing-only) simulator moved to M2: one bearing-only sensor cannot
-  observe range, so it only becomes useful once it is fused with radar.
-- **M2:** multi-sensor association + track lifecycle; UDP ingest; record and
-  replay; WebSocket stream and basic Leaflet map; ADS-B ingest (OpenSky).
-- **M3:** degraded-network tests; broader fuzz and fault injection; benchmarks;
-  finish design doc and threat model; demo video.
+- **M0:** build, CI, sanitizers, fuzz harness, wire codec, docs.
+- **M1:** radar simulator with ground truth; single-sensor tracker; sensor
+  table (ADR 0003); first regression scenarios.
+- **M2:** multi-sensor association + lifecycle; camera fusion; decision trace;
+  UDP ingest; record and replay; WebSocket stream and Leaflet map; ADS-B.
+- **M3:** degraded-network simulator and tests; fault injection; fuzzing of
+  every parser and of the engine; benchmarks; design doc, threat model, demo
+  runbook (the video itself is to be recorded from `docs/demo.md`).
 - **Stretch:** CUDA association, only after M3.
 
-## 6. Estimation (M1)
+## 6. Estimation and association
 
 **Frame.** Local flat x/y plane in metres, +x east, +y north; angles are
 radians counter-clockwise from +x. A sensor's pose (position, boresight yaw)
 comes from the sensor table (ADR 0003); measured bearings are relative to the
-boresight.
+boresight. Geodetic input is projected on a fixed per-run tangent plane
+(ADR 0007).
 
 **Filter.** `estimation::ConstantVelocityFilter`, state `[px, py, vx, vy]`,
 continuous white-noise-acceleration process noise with PSD `q` per axis.
-`predict(dt)` takes seconds explicitly; `update(z, R)` is the linear
-position update. All updates go through one Joseph-form
-`update_with_innovation(y, H, R)` with a Cholesky solve of `S`; `P` is
-re-symmetrised after every step. Every operation validates its inputs and
-either commits a finite result or leaves the state untouched.
+`predict(dt)` takes seconds explicitly. All updates go through one
+Joseph-form `update_with_innovation(y, H, R)` with a Cholesky solve of `S`;
+`P` is re-symmetrised after every step. Every operation validates its inputs
+and either commits a finite result or leaves the state untouched.
 
-**EKF.** `update_range_bearing()` evaluates `h(x) = [r, wrap(atan2 - yaw)]` and
-its analytic Jacobian at the predicted state. The bearing innovation is
-wrapped with `std::remainder(., 2*pi)` (exact, libm-independent), so a
-measurement across the +/-pi seam is a small correction. Updates are refused
-when the predicted range is under 1 m (the Jacobian is singular at 0).
+**EKF models.** Range-bearing `h(x) = [r, wrap(atan2 - yaw)]`, bearing-only
+`h(x) = wrap(atan2 - yaw)`, geodetic position linear in the tangent plane.
+Bearing innovations are wrapped with `std::remainder(., 2*pi)`. Updates are
+refused when the predicted range is under 1 m.
 
-**Engine (M1).** One track, no association. The first usable range-bearing
-measurement initialises it (position from the inverse model with first-order
-covariance, zero velocity with a 100 m/s prior). Each later measurement is
-predicted to and applied on a copy of the filter, committed only if both steps
-succeed. Measurements are rejected and counted, never applied, when they are
-invalid, from an unknown sensor, of the wrong or an unsupported kind, a
-duplicate of that sensor's last `seq`, or older than the track (drop +
-counter, per the open question below). Gaps longer than one hour are refused
-by the filter; track restart and coasting are M2 lifecycle work.
+**Association and lifecycle (ADR 0004).** Per group (one sensor, one
+timestamp): screen (validity, sensor, kind, duplicates, order), lifecycle at
+the group time, chi-square gating in each sensor's space (p = 0.999), a gate
+screen that skips provably-out-of-gate pairs (section 10), two-pass global
+nearest neighbour (established tracks first), updates, then initiation from
+position-observing leftovers under `max_tracks`. Tentative -> confirmed
+(3 hits) -> coasting (2.5 s) -> dropped (10 s; tentative 3 s; or 1 km
+position sigma). Manoeuvre handling by fading-memory NIS process-noise
+switching.
 
 ## 7. Tuning and baseline accuracy
 
-`EngineConfig::accel_psd` defaults to `q = 4 m^2/s^3`, from the rule of thumb
-`q ~ (0.5..1) * a_max^2 * T` for manoeuvres up to 2-3 m/s^2 at `T = 1 s`. It
-trades straight-line smoothing against lag in turns; on the M1 scenarios:
+`EngineConfig::accel_psd` defaults to `q = 4 m^2/s^3` (rule of thumb
+`q ~ (0.5..1) * a_max^2 * T` for 2-3 m/s^2 manoeuvres at 1 Hz):
 
 | q [m^2/s^3] | straight_crossing RMSE / raw | turn RMSE / raw |
 |---|---|---|
@@ -112,12 +142,157 @@ trades straight-line smoothing against lag in turns; on the M1 scenarios:
 | 4 (default) | 0.50 | 0.72 |
 | 16 | 0.59 | 0.73 |
 
-The regression test asserts the default's values with
-margin; see the header of `tests/scenario_regression_test.cpp`. Manoeuvre
-handling beyond process noise (IMM, adaptive `q`) is out of scope for now.
+Multi-target baselines (default configuration, direct engine feed; the
+numbers each test prints; unchanged between the M2 test-only stand-ins and
+the real Eigen/GoogleTest, and unchanged by every M3 change):
 
-## 8. Open questions
+| scenario | per-target RMSE [m] | missed | ID sw. | false | fused / radar-only |
+|---|---|---|---|---|---|
+| crossing_pair | 8.39 8.63 | 0/172 | 0 | 0 | 8.51 / 11.18 |
+| close_pass | 10.49 7.64 12.20 | 0/258 | 0 | 0 | 10.11 / 13.33 |
+| enter_leave | 7.78 9.98 9.62 8.24 | 0/302 | 0 | 0 | 8.91 / 11.10 |
+| formation_split (M3) | 11.54 11.58 10.42 | 0/258 | 0 | 0 | 11.18 / 27.78 |
+| formation_split, greedy | max 35.49, mean 27.27 | 1/258 | 2 | 0 | |
 
-- Local tangent-plane origin for ADS-B (fixed per run vs. first fix). Leaning fixed per run, recorded in the log header.
-- Out-of-order measurements: drop, or retrodict within a small window. Start with drop + counter. *(M1 engine drops and counts.)*
-- WebSocket library vs. a minimal hand-rolled server (adds a dependency vs. attack surface).
+formation_split separates GNN from greedy assignment; across other noise
+seeds greedy broke identity in all and GNN in some (the geometry is
+genuinely ambiguous), see `tests/multi_target_regression_test.cpp`.
+
+## 8. Parameters
+
+Everything below is in `PipelineConfig` (and recorded in every event log
+header) unless marked.
+
+| Parameter | Default | Reasoning |
+|---|---|---|
+| `accel_psd` | 4 m²/s³ | section 7 |
+| `initial_velocity_sigma` | 100 m/s | up to roughly airliner speed from one fix |
+| `gate_probability` | 0.999 | a lost true association is a 1-in-1000 event; global assignment makes the wide gate cheap |
+| `near_miss_factor` | 4 | trace only |
+| `assignment` | gnn | greedy for comparisons only (M3) |
+| manoeuvre `fading` / `detect_probability` / `accel_psd_factor` | 0.8 / 0.99 / 10 | ADR 0004, engine.hpp |
+| `confirm_hits`, `tentative_timeout_s`, `coast_after_s`, `drop_after_s`, `max_position_sigma_m` | 3, 3 s, 2.5 s, 10 s, 1000 m | ~1 Hz sensors; lifecycle.hpp |
+| `max_tracks` | 1024 | resource bound |
+| trace sizes | 64 events/track, 64 dropped tracks, 1024 measurements, 32 sensors/track | bounded memory |
+| `snapshot_interval_s` | 0.5 s (measurement time) | display rate |
+| `dedup_window` | 256 per sensor | covers a scan and its retransmissions |
+| `max_scan_size` | 256 | bounds one assignment problem |
+| `reorder_window_s` | 0 (library), **0.5 s (daemon)** | ADR 0009, section 9 |
+| `reorder_capacity` | 4096 frames | bounded |
+| `max_time_ahead_s` | 0 (off) | ADR 0010; needs a common timebase; set ≤ the reorder window |
+| `gate_screen` (not recorded) | on | never changes results (section 10) |
+| rate limit (daemon only, not recorded) | 20 000/s, burst 4 096, 1 024 sources | ADR 0010; drops never reach the engine or the log |
+
+## 9. Degraded-network behaviour
+
+**Model (ADR 0008).** Per sensor link: scheduled outages, Gilbert-Elliott
+burst loss, delay + uniform jitter (so reordering follows from jitter), and
+duplication with an independent delay; seeded per (seed, sensor).
+
+**Levels** (`tests/degraded_network_test.cpp`): mild = 1% loss, 20 + U(0, 50)
+ms, 1% duplicates; moderate = 3% loss + bursts (0.01 / 0.25 / 0.6), 50 +
+U(0, 400) ms, 2% duplicates; severe = 8% + bursts (0.03 / 0.2 / 0.8), 100 +
+U(0, 800) ms, 5% duplicates.
+
+**Scoring.** As in the M2 regression (CLEAR-MOT style; `tests/scenario_support.hpp`),
+but frames go through `net::Pipeline` exactly as the daemon consumes them
+(arrival order, receive time = arrival, a quiet tick after 100 ms), and each
+truth instant is scored on what the operator would see at that moment. Even a
+clean network therefore scores slightly worse than the direct engine feed:
+the radar scan stamped T is still being assembled at T.
+
+**Out-of-order policy (ADR 0009).** Sweep over crossing_pair, close_pass and
+enter_leave, three impairment seeds each (9 runs per row; ID switches of
+formation_split, which is excluded from the bounded set, in parentheses):
+
+| level | window s | out-of-order % | missed % | mean RMSE m | worst RMSE m | ID switches | false tracks |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| clean | 0.00 | 0.0 | 0.00 | 11.10 | 18.69 | 0 (0) | 0 |
+| clean | 0.25 | 0.0 | 0.00 | 11.45 | 19.18 | 0 (0) | 0 |
+| clean | 0.50 | 0.0 | 0.00 | 11.45 | 19.18 | 0 (0) | 0 |
+| clean | 1.00 | 0.0 | 0.23 | 13.99 | 27.73 | 0 (0) | 0 |
+| clean | 2.00 | 0.0 | 0.57 | 17.11 | 37.32 | 0 (0) | 0 |
+| mild | 0.00 | 0.0 | 0.00 | 11.16 | 18.87 | 0 (0) | 0 |
+| mild | 0.50 | 0.0 | 0.00 | 11.52 | 19.36 | 0 (2) | 0 |
+| mild | 1.00 | 0.0 | 0.23 | 14.06 | 27.97 | 0 (0) | 0 |
+| moderate | 0.00 | 10.1 | 0.43 | 12.64 | 21.64 | 1 (4) | 0 |
+| moderate | 0.25 | 0.0 | 0.32 | 12.02 | 20.67 | 1 (2) | 0 |
+| moderate | 0.50 | 0.0 | 0.32 | 12.12 | 20.81 | 1 (4) | 0 |
+| moderate | 1.00 | 0.0 | 0.59 | 14.73 | 29.92 | 1 (2) | 0 |
+| moderate | 2.00 | 0.0 | 1.13 | 17.84 | 39.93 | 1 (2) | 0 |
+| severe | 0.00 | 29.0 | 6.52 | 15.90 | 29.85 | 6 (9) | 0 |
+| severe | 0.25 | 6.5 | 0.68 | 13.88 | 27.14 | 1 (9) | 0 |
+| severe | 0.50 | 0.1 | 0.52 | 13.87 | 29.37 | 1 (0) | 0 |
+| severe | 1.00 | 0.0 | 0.96 | 15.54 | 32.06 | 1 (2) | 0 |
+| severe | 2.00 | 0.0 | 1.80 | 18.62 | 40.15 | 1 (2) | 0 |
+
+Decision: a bounded reorder stage, 0.5 s in the daemon. It recovers
+essentially all the data the M2 drop policy loses (29% -> 0.1% at severe)
+for +0.35 m mean RMSE and +0.4 s of end-to-end latency on a clean network
+(measured: 101 ms -> 502 ms at 100 targets, docs/benchmarks.md).
+The engine still drops whatever arrives later than the window (counted).
+
+**Recovery after an outage.** Definition (`recovery_after`): the targets
+covered and matched just before an outage [start, end) of every link and
+still covered after it; a target has recovered at the first truth instant
+≥ end at which it is matched to a track *updated after the outage ended*
+(extrapolation through the gap does not count); recovery time is from the
+outage end until all have recovered; a target "survived" if that track is the
+one it had before. Measured (mild level, outage at t = 30 s, both windows):
+
+| outage | crossing_pair | close_pass | enter_leave |
+|---|---|---|---|
+| 5 s | 1 s, 2/2 survived | 3 s, 2/3 (the turning target re-initiated) | 1 s, 3/3 |
+| 8 s | 1 s, 2/2 | 3 s, 2/3 | 3 s, 2/3 |
+| 15 s | 3 s, 0/2 (dropped as Stale, re-initiated) | 4 s, 0/3 | 4 s, 0/3 |
+
+Rule the test asserts generally: if the gap from a track's last update to
+the outage end plus two revisits is within `drop_after_s` and the target
+flies straight, the track survives; if the gap exceeds `drop_after_s` it is
+re-initiated; recovery within 5 s (+ window) either way. The demo scenario
+(8 s outage at the moderate level) recovers in 4 s with all five targets
+tracked (`DegradedNetwork.DemoScenarioAsInTheRunbook`).
+
+## 10. Performance
+
+Full report: [`benchmarks.md`](benchmarks.md). Summary (sandbox VM, 2 vCPU
+Xeon, GCC 13 `-O3`, 5 runs per configuration):
+
+- per-scan engine time at 1 000 targets + 10% clutter: median 10.0 ms, p99
+  10.5 ms (before the gate screen: median 145 ms);
+- throughput, one engine thread, 300 targets + 30 clutter/scan:
+  ~309 000 measurements/s;
+- **tracks per core: 2 976 targets (10% clutter, ~4 150 live tracks
+  including tentative ones) with p99 scan time ≤ 100 ms at 1 Hz;**
+- end to end through the real daemon (UDP send to WebSocket snapshot,
+  loopback): median 101 ms at 100 targets and 115 ms at 1 000 with the
+  reorder window off -- the 100 ms is the quiet tick that ends a scan -- and
+  502 / 519 ms with the default 0.5 s window.
+
+Profile (callgrind): before M3, > 70% of engine time at 1 000 targets was the
+all-pairs gating computation. The **gate screen** (`estimation::may_gate`)
+bounds `d²` from below with quantities that cost a subtraction, a norm and a
+few multiplications per pair: for SPD `S`, `d² ≥ y_i²/S_ii`; for
+range-bearing `S_rr ≤ λ + σ_r²`, `S_bb ≤ λ/r² + σ_b²` (λ: largest eigenvalue
+of the predicted position covariance) and the plane distance satisfies
+`D² ≤ y_r² + r_m r y_b²`; so `d² ≤ G` implies
+`D² ≤ G (λ (1 + r_m/r) + σ_r² + r_m r σ_b²)`. Pairs beyond that (widened by
+1e-6 relative) are skipped. It is exact in effect: every regression,
+degraded, fault and replay test is unchanged, `GateScreen.*` compares full
+traces with the screen on and off, and `fuzz_engine` does the same on
+arbitrary input. The remaining cost is the all-pairs screen itself
+(O(measurements x tracks)); a spatial index would remove it and is deferred.
+
+## 11. Open questions (final status)
+
+- Local tangent-plane origin for ADS-B: **resolved**, fixed per run and
+  recorded (ADR 0007).
+- Out-of-order measurements: **resolved**, bounded reorder stage before the
+  engine, drop beyond it (ADR 0009). Retrodiction deferred (not needed at the
+  measured jitter levels).
+- WebSocket library vs. minimal server: **resolved**, minimal read-only
+  server, fuzzed (ADR 0006).
+- Clock faults: **resolved** with the opt-in clock gate (ADR 0010).
+- Sensor bias estimation / registration, frozen-sensor detection, spatial
+  indexing for >3 000 tracks per thread, CUDA association: **deferred**
+  (documented limitations).

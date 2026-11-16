@@ -41,7 +41,12 @@ Result<UdpReceiver, std::string> UdpReceiver::bind(const std::string& address, s
 }
 
 UdpReceiver::UdpReceiver(UdpReceiver&& o) noexcept
-    : fd_(std::exchange(o.fd_, -1)), port_(o.port_) {}
+    : fd_(std::exchange(o.fd_, -1)), port_(o.port_), rate_limit_(o.rate_limit_) {}
+
+void UdpReceiver::set_rate_limit(const RateLimitConfig& c) {
+  SourceRateLimiter check(c);  // validates
+  rate_limit_ = c;
+}
 
 UdpReceiver& UdpReceiver::operator=(UdpReceiver&& o) noexcept {
   if (this != &o) {
@@ -50,6 +55,7 @@ UdpReceiver& UdpReceiver::operator=(UdpReceiver&& o) noexcept {
     }
     fd_ = std::exchange(o.fd_, -1);
     port_ = o.port_;
+    rate_limit_ = o.rate_limit_;
   }
   return *this;
 }
@@ -65,13 +71,17 @@ void UdpReceiver::run(const std::atomic<bool>& stop, const Clock& clock, Bounded
   // One byte larger than the largest valid frame, so oversize datagrams are
   // detected rather than silently truncated to something that might decode.
   std::array<std::uint8_t, wire::kHeaderSize + wire::kMaxPayloadSize + 1> buf{};
+  SourceRateLimiter limiter(rate_limit_);
   while (!stop.load(std::memory_order_relaxed)) {
     pollfd p{fd_, POLLIN, 0};
     const int ready = ::poll(&p, 1, poll_ms);
     if (ready <= 0) {
       continue;  // timeout or EINTR: re-check stop
     }
-    const ssize_t n = ::recv(fd_, buf.data(), buf.size(), MSG_DONTWAIT);
+    sockaddr_in from{};
+    socklen_t from_len = sizeof from;
+    const ssize_t n = ::recvfrom(fd_, buf.data(), buf.size(), MSG_DONTWAIT,
+                                 reinterpret_cast<sockaddr*>(&from), &from_len);  // NOLINT
     if (n < 0) {
       continue;
     }
@@ -80,6 +90,11 @@ void UdpReceiver::run(const std::atomic<bool>& stop, const Clock& clock, Bounded
     const auto size = static_cast<std::size_t>(n);
     if (size > buf.size() - 1) {
       stats.oversize.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
+    // Keyed by source address only: rotating source ports buys nothing.
+    if (!limiter.admit(ntohl(from.sin_addr.s_addr), recv)) {
+      stats.rate_limited.fetch_add(1, std::memory_order_relaxed);
       continue;
     }
     if (!wire::decode_measurement(std::span<const std::uint8_t>(buf.data(), size)).ok()) {

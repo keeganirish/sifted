@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,8 +22,9 @@ namespace sifted::net {
 // The deterministic half of ingest, shared by the live daemon and the
 // replayer: everything after a frame has been received and time-stamped.
 //
-//   bytes -> strict wire decode -> duplicate suppression -> scan assembly
-//         -> Engine::on_scan -> output lines (+ periodic track snapshots)
+//   bytes -> strict wire decode -> duplicate suppression -> clock gate
+//         -> [reorder stage] -> scan assembly -> Engine::on_scan
+//         -> output lines (+ periodic track snapshots)
 //
 // It runs on the engine thread only. Its output is a pure function of the
 // sensor table, the PipelineConfig and the ordered (recv time, frame | tick)
@@ -38,6 +40,7 @@ namespace sifted::net {
 //   m <recv_ns> <sensor> <seq> <time_ns> <outcome> <track>   one per measurement
 //   x <recv_ns> <decode-error>                               frame failed to decode
 //   d <recv_ns> <sensor> <seq> <time_ns>                     duplicate suppressed
+//   f <recv_ns> <sensor> <seq> <time_ns>                     too far ahead of recv (clock gate)
 //   s <snapshot json>                                        track snapshot
 // <outcome> and <decode-error> are to_string() with spaces replaced by '_'.
 class Pipeline {
@@ -53,7 +56,9 @@ class Pipeline {
   void on_tick(Timestamp recv);
   void finish(Timestamp recv);
 
-  bool has_pending() const noexcept { return !pending_.empty(); }
+  // A scan is pending or frames are held in the reorder stage: a later tick
+  // or finish() will produce output.
+  bool has_pending() const noexcept { return !pending_.empty() || !held_.empty(); }
   const Engine& engine() const noexcept { return engine_; }
   const PipelineConfig& config() const noexcept { return config_; }
   const SensorTable& sensors() const noexcept { return engine_.sensors(); }
@@ -65,8 +70,23 @@ class Pipeline {
   std::uint64_t duplicates() const noexcept { return dedup_.suppressed(); }
   std::uint64_t scans() const noexcept { return scans_; }
   std::uint64_t snapshots() const noexcept { return snapshot_seq_; }
+  // Clock gate rejections (max_time_ahead_s).
+  std::uint64_t future_rejected() const noexcept { return future_rejected_; }
+  // Reorder stage: frames held now, the most ever held, frames released early
+  // because the stage was full, and late frames that bypassed it.
+  std::size_t held() const noexcept { return held_.size(); }
+  std::size_t held_high_water() const noexcept { return held_high_water_; }
+  std::uint64_t reorder_forced() const noexcept { return reorder_forced_; }
+  std::uint64_t reorder_late() const noexcept { return reorder_late_; }
 
  private:
+  struct Held {
+    Measurement m;
+    Timestamp recv;
+    std::uint64_t order;  // arrival counter: stable tie-break
+  };
+  void assemble(Timestamp recv, const Measurement& m);
+  void release(Timestamp now, bool all);
   void flush(Timestamp recv);
   void emit(std::string line);
 
@@ -82,6 +102,15 @@ class Pipeline {
   std::uint64_t frames_ = 0;
   std::uint64_t scans_ = 0;
   std::array<std::uint64_t, 9> decode_errors_{};
+  std::int64_t reorder_window_ns_ = 0;
+  std::int64_t max_ahead_ns_ = 0;
+  std::vector<Held> held_;  // sorted by (time, sensor, order)
+  std::uint64_t arrivals_ = 0;
+  std::optional<Timestamp> released_;  // latest measurement time released
+  std::size_t held_high_water_ = 0;
+  std::uint64_t reorder_forced_ = 0;
+  std::uint64_t reorder_late_ = 0;
+  std::uint64_t future_rejected_ = 0;
 };
 
 }  // namespace sifted::net

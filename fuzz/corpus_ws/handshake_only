@@ -1,0 +1,7 @@
+GET / HTTP/1.1
+Host: localhost:8765
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==
+Sec-WebSocket-Version: 13
+

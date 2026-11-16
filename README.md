@@ -6,7 +6,7 @@ Sifted takes noisy, partial, and sometimes conflicting measurements from many se
 
 It is a small-scale, from-scratch take on the core problem behind modern situational-awareness software. The goal is a working, well-tested, well-documented system that demonstrates systems-level engineering: determinism, traceability, robust handling of untrusted input, thread safety, networking, and measured performance.
 
-> **Status: milestones 0 and 1 complete; milestone 2 implemented, final verification pending.** Built: multi-target, multi-sensor tracking (radar + camera + ADS-B) with chi-square gating, global nearest-neighbour assignment, track lifecycle and a per-track decision trace; deterministic record and replay; the `sifted_fusiond` daemon (UDP in, WebSocket out); a Leaflet map; and an OpenSky ADS-B adapter. M2 is not marked complete until its tests have run against the real Eigen and GoogleTest packages, the libFuzzer targets have been built, and the map and live OpenSky feed have been tried for real (see the [roadmap](#roadmap)). Features below are marked as built only when they are; see [`docs/design.md`](docs/design.md).
+> **Status:** working end to end: multi-sensor tracking, record and replay, the live daemon and map, degraded-network handling, fault injection, fuzzing and benchmarks. All C++ and Python tests pass under the dev, release, ASan/UBSan and TSan presets. The OpenSky adapter is tested offline (sample responses and property tests) but has not yet been run against the live API. Design and decisions: [`docs/design.md`](docs/design.md).
 
 ## Features
 
@@ -17,9 +17,9 @@ It is a small-scale, from-scratch take on the core problem behind modern situati
 - **Operator view.** *(built)* A web client subscribes to the track stream and shows a live map with track identity, confidence, and contributing sensors.
 - **Deterministic record and replay.** *(built)* Any run can be recorded and replayed so that identical input produces bit-for-bit identical output. Time is an input to the system, not read from the machine.
 - **Traceability.** *(built)* Every track can be traced back to the measurements and decisions that produced it, so you can ask why the system believes something.
-- **Degraded-network behavior.** *(planned, M3)* Packet loss, delay, reordering, and dropped links can be simulated, with measurements of how quickly and how well the picture recovers.
-- **Fuzzing and fault injection.** *(partly built)* Malformed packets and event logs are fuzzed; sensor dropouts and duplicate messages are part of the simulator and tests. Broader fault injection is M3.
-- **Measured performance.** *(planned, M3)* Latency, throughput, and tracks handled per core are benchmarked and reported.
+- **Degraded-network behavior.** *(built)* Packet loss (independent and bursty), delay, jitter-induced reordering, duplication and link outages are simulated with one seeded model, offline in tests and live as a UDP proxy; a bounded reorder stage keeps jitter from becoming data loss; recovery after outages is measured ([design §9](docs/design.md#9-degraded-network-behaviour)).
+- **Fuzzing and fault injection.** *(built)* Every parser of untrusted input (wire frames, event logs and their headers, sensor tables, the WebSocket handshake and client frames) and the engine itself are fuzzed with libFuzzer; the OpenSky adapter is property-tested. Sensor restarts, dropouts, clock faults, bias, stuck sensors, clutter floods, duplicate floods and malformed bursts are injected and their effects tested ([threat model](docs/threat-model.md#sensor-and-input-faults)).
+- **Measured performance.** *(built)* Per-scan latency distributions, throughput, tracks per core and end-to-end daemon latency ([benchmarks](docs/benchmarks.md)): about 3 000 targets per engine thread within a 100 ms p99 budget at 1 Hz on a 2-vCPU VM.
 
 ## Architecture
 
@@ -64,12 +64,21 @@ ctest --preset dev
 Other presets: `release`, `asan` (ASan + UBSan), `tsan`, and `fuzz` (Clang + libFuzzer).
 No system packages? Add `-DSIFTED_FETCH_DEPS=ON` to download pinned copies (untested so far).
 
+**ThreadSanitizer on WSL2 and other recent kernels:** if every TSan binary
+fails with "unexpected memory mapping", the kernel randomises mmap with more
+bits than TSan supports. This is environmental, not a code bug. Run
+`sudo sysctl vm.mmap_rnd_bits=28` once (until reboot), or run the tests
+under `setarch "$(uname -m)" -R ctest --preset tsan`. CI does the former.
+
 ```bash
 cmake --preset fuzz && cmake --build --preset fuzz     # needs libclang-rt-18-dev
-mkdir -p build/fuzz-work build/fuzz-work-log
-build/fuzz/fuzz/fuzz_decode build/fuzz-work fuzz/corpus -max_total_time=60
-build/fuzz/fuzz/fuzz_event_log build/fuzz-work-log fuzz/corpus_log -max_total_time=60
+mkdir -p build/fuzz-work/engine
+build/fuzz/fuzz/fuzz_engine build/fuzz-work/engine fuzz/corpus_engine -max_total_time=60
 ```
+
+Six targets (`fuzz_decode`, `fuzz_event_log`, `fuzz_log_header`,
+`fuzz_sensor_table`, `fuzz_websocket`, `fuzz_engine`); see
+[`fuzz/README.md`](fuzz/README.md).
 
 ### Run the daemon with simulated sensors
 
@@ -81,8 +90,10 @@ cd sim && python3 -m sifted_sim.generate crossing_pair /tmp/crossing && cd ..
 build/dev/src/apps/sifted_fusiond --sensors /tmp/crossing/sensors.cfg \
     --record /tmp/crossing.siftlog --output /tmp/live.txt
 
-# 3. Open web/index.html in a browser (it connects to ws://localhost:8765/;
-#    use index.html?ws=ws://host:port/ for another address).
+# 3. Serve the map and open http://localhost:8000/ (it connects to ws://localhost:8765/;
+#    use ?ws=ws://host:port/ for another address). Not file://: OpenStreetMap blocks
+#    tile requests without a Referer, so every tile shows "403 Access blocked".
+(cd web && python3 -m http.server 8000) &
 
 # 4. In another terminal, send the scenario at 5x real time.
 cd sim && python3 -m sifted_sim.send crossing_pair --speed 5
@@ -97,6 +108,34 @@ Simulated scenarios use a local x/y frame; for display (and for geodetic
 input) the daemon maps it to latitude/longitude through a tangent-plane origin,
 `--origin lat,lon[,alt]` (default 51.4779,-0.0015, near Greenwich). Run
 `sifted_fusiond --help` for every option.
+
+### Degraded networks and faults
+
+```bash
+# Impairment proxy between sender and daemon (ADR 0008): loss with bursts,
+# jitter (and so reordering), duplicates, an outage 30-38 s after it starts.
+cd sim && python3 -m sifted_sim.impair --listen 127.0.0.1:5601 --target 127.0.0.1:5600 \
+    --seed 7 --loss 0.03 --burst 0.01 0.25 0.6 --jitter-ms 400 --duplicate 0.02 --outage 30:38
+# ... and send through it, optionally with a sensor fault (sim/sifted_sim/faults.py):
+python3 -m sifted_sim.send crossing_pair --target 127.0.0.1:5601 --fault restart:10@30
+```
+
+The daemon holds frames for `--reorder-window` (default 0.5 s) and releases
+them in measurement-time order (ADR 0009); `--max-time-ahead S` rejects frames
+from sensors whose clocks run ahead (ADR 0010; needs wall-clock senders, e.g.
+`send.py --rebase-now`); `--rate-limit` caps datagrams per source address.
+The demo runbook is [`docs/demo.md`](docs/demo.md) (`scripts/demo.sh` runs it).
+
+### Benchmarks
+
+```bash
+cmake --preset release && cmake --build --preset release
+build/release/benchmarks/sifted_bench all --runs 5 > engine.csv     # ~15 min
+python3 benchmarks/e2e_latency.py build/release/src/apps/sifted_fusiond > e2e.csv
+python3 benchmarks/report.py <dir with the CSVs>                     # tables (+ plot)
+```
+
+Results and method: [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ### ADS-B (OpenSky)
 
@@ -119,31 +158,31 @@ OpenSky data is subject to the OpenSky Network's terms of use.
 
 ```
 src/sifted/   library: core (types, clock, sensor table, outcomes, multi-track engine),
-              wire (codec), estimation (Kalman filter, EKF models, geodetic),
+              wire (codec), estimation (Kalman filter, EKF models, geodetic, gate screen),
               association (gating, assignment, lifecycle), store (track table,
-              decision trace), replay (event log, replayer), net (ingest pipeline,
-              dedup, snapshots, UDP, queue, WebSocket)
+              decision trace), replay (event log, replayer), net (ingest pipeline with
+              dedup, clock gate and reorder stage, snapshots, impairment model, UDP,
+              rate limiting, queue, WebSocket)
 src/apps/     sifted_fusiond, the fusion daemon (live and replay)
-sim/          sensor simulators, scenarios, UDP sender, OpenSky adapter (Python)
+sim/          sensor simulators, scenarios, UDP sender with fault injection,
+              impairment proxy, OpenSky adapter (Python)
 web/          operator map client (Leaflet, no build step)
-tests/        unit tests, fixtures, ground-truth regression tests (single and multi-target)
-fuzz/         libFuzzer targets (wire decoder, event log) and seed corpora
-docs/         design document, threat model, ADRs 0001-0007; benchmark report to come
+tests/        unit tests, fixtures, ground-truth regression, degraded-network,
+              fault-injection and UDP flood tests
+fuzz/         six libFuzzer targets and seed corpora
+benchmarks/   engine benchmark harness, end-to-end latency script, report generator
+scripts/      demo launcher
+docs/         design document, threat model, ADRs 0001-0011, benchmark report, demo runbook
 cmake/        build options, sanitizers, dependencies
 ```
 
-## Roadmap
+## Milestones
 
-- [x] Milestone 0: project skeleton, CI, sanitizers, fuzz harness, wire format, simulated clock
-- [x] Milestone 1: radar simulator, sensor table, single-sensor Kalman/EKF tracker, ground-truth regression tests (camera simulator moved to M2)
-- [ ] Milestone 2: multi-sensor association and lifecycle, camera simulator, decision trace, record and replay, UDP ingest and daemon, WebSocket stream and map, ADS-B ingest. **Implemented; verification pending:**
-  - [x] all C++ and Python tests pass, including under ASan/UBSan and TSan, built against small test-only stand-ins for Eigen and GoogleTest (the packages were not installable in the development sandbox)
-  - [x] daemon end to end over UDP and WebSocket; live run and replay produce identical output
-  - [ ] the same tests against the real `libeigen3-dev` / `libgtest-dev` (CI, or `cmake --preset dev` locally)
-  - [ ] libFuzzer build of `fuzz_decode` and `fuzz_event_log` (the event-log target was only run under a GCC mutation driver)
-  - [ ] the map in a real browser, and the OpenSky adapter against the live API (only tested offline on a sample written from the API documentation)
-- [ ] Fuzzing, degraded-network tests, benchmarks, design document, demo video
-- [ ] Stretch: CUDA-accelerated association
+- **M0:** project skeleton, CI, sanitizers, fuzz harness, wire format, simulated clock.
+- **M1:** radar simulator, sensor table, single-sensor Kalman/EKF tracker, ground-truth regression tests.
+- **M2:** multi-sensor association and track lifecycle, camera simulator, decision trace, record and replay, UDP ingest and daemon, WebSocket stream and map, ADS-B ingest.
+- **M3:** degraded-network simulator and recovery tests, bounded reorder stage, fault injection, clock gate and per-source rate limiting, fuzzing of every parser and the engine, benchmarks, design document, threat model, demo runbook ([`docs/demo.md`](docs/demo.md)).
+- **Possible next steps:** CUDA-accelerated association; a spatial index for more than ~3,000 tracks per engine thread; sensor bias estimation.
 
 ## Scope and ground rules
 

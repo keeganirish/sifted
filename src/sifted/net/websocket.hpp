@@ -65,6 +65,20 @@ std::optional<std::string> parse_handshake(std::string_view request);
 // One unmasked, final text frame (server -> client).
 std::string encode_text_frame(std::string_view payload);
 
+// The first client frame at the start of `buffer`, under the read-only
+// policy: only final, masked control frames (Close, Ping, Pong) with at most
+// 125 bytes of payload are accepted; anything else is Refused (the server
+// answers with close code 1008). NeedMore: the frame is not complete yet.
+// `consumed` bytes (0 unless Ping, Pong or Close) belong to the frame;
+// `payload` is unmasked.
+struct ClientFrame {
+  enum class Kind : std::uint8_t { NeedMore, Refused, Close, Ping, Pong };
+  Kind kind = Kind::NeedMore;
+  std::size_t consumed = 0;
+  std::string payload;
+};
+ClientFrame parse_client_frame(std::string_view buffer);
+
 class WebSocketServer {
  public:
   static Result<std::unique_ptr<WebSocketServer>, std::string> start(const WebSocketConfig& cfg);

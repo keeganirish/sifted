@@ -1,0 +1,26 @@
+sifted-log 1
+param accel_psd 4
+param initial_velocity_sigma 100
+param gate_probability 0.999
+param near_miss_factor 4
+param manoeuvre_fading 0.8
+param manoeuvre_detect_probability 0.99
+param manoeuvre_accel_psd_factor 10
+param confirm_hits 5
+param tentative_timeout_s 3
+param coast_after_s 2.5
+param drop_after_s 100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+param max_position_sigma_m 1000
+param max_tracks 0997
+param trace_events_per_track 64
+param trace_dropped_tracks_kept 00
+param trace_measurement_log 0224
+param trace_sensors_per_track 32
+param snapshot_interval_s 0.5
+param dedup_window 256
+param max_scan_size 256
+origin .5514779 -0.0015 0
+sensors
+sifted-sensors 1
+sensor 112 range_bearing 0 0 0
+sensor 202 bearing_only -3000 3000 -0.785398163374483

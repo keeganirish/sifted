@@ -18,6 +18,7 @@ endif()
 
 option(SIFTED_BUILD_TESTS "Build unit and integration tests" ON)
 option(SIFTED_BUILD_FUZZ  "Build libFuzzer targets (requires Clang)" OFF)
+option(SIFTED_BUILD_BENCHMARKS "Build the benchmark harness (benchmarks/)" ON)
 option(SIFTED_WERROR      "Treat warnings as errors" OFF)
 option(SIFTED_CLANG_TIDY  "Run clang-tidy during the build" OFF)
 option(SIFTED_FETCH_DEPS  "Download pinned dependencies if not found on the system" OFF)
@@ -36,4 +37,8 @@ endif()
 
 if(SIFTED_BUILD_FUZZ)
   add_subdirectory(fuzz)
+endif()
+
+if(SIFTED_BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
 endif()

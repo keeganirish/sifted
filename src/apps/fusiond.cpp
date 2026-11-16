@@ -61,10 +61,18 @@ constexpr const char* kUsage =
     "  --origin LAT,LON[,ALT]  tangent-plane origin for geodetic input and map display\n"
     "                          (fixed for the run, recorded in the log) [51.4779,-0.0015,0]\n"
     "  --queue N               engine queue capacity (frames)    [4096]\n"
+    "  --rate-limit R          datagrams/s per source address (0: off) [20000]\n"
+    "  --rate-burst B          per-source burst allowance (datagrams)  [4096]\n"
+    "  --rate-sources N        source addresses tracked (LRU beyond)   [1024]\n"
+    "  --reorder-window S      hold frames S seconds and release them in measurement-time\n"
+    "                          order (ADR 0009; 0: off, M2 behaviour)  [0.5]\n"
+    "  --max-time-ahead S      reject frames stamped more than S seconds after their receive\n"
+    "                          time (ADR 0010; needs wall-clock senders; 0: off) [0]\n"
     "  tracker parameters (defaults: docs/design.md section 6):\n"
     "  --accel-psd Q  --initial-velocity-sigma V  --gate-probability P\n"
     "  --confirm-hits N  --tentative-timeout S  --coast-after S  --drop-after S\n"
     "  --max-position-sigma M  --max-tracks N  --snapshot-interval S\n"
+    "  --assignment gnn|greedy (greedy only for comparisons)\n"
     "\n"
     "common options:\n"
     "  --ws-port PORT          serve track snapshots over WebSocket (0: off) [8765]\n"
@@ -87,6 +95,7 @@ struct Options {
   std::uint16_t ws_port = 8765;
   std::string ws_bind = "127.0.0.1";
   std::size_t queue = 4096;
+  net::RateLimitConfig rate_limit{20000.0, 4096.0, 1024};
   double stats_interval_s = 5.0;
   double pace = 0.0;
   bool hold = false;
@@ -130,6 +139,9 @@ bool parse_host_port(std::string_view s, std::string& host, std::uint16_t& port)
 // Returns an error message, or empty on success.
 std::string parse_args(int argc, char** argv, Options& o) {
   o.config.engine.origin = kDefaultOrigin;
+  // The daemon faces a real network: hold frames briefly so delay jitter does
+  // not become out-of-order drops (ADR 0009). The library default stays 0.
+  o.config.reorder_window_s = 0.5;
   for (int i = 1; i < argc; ++i) {
     const std::string_view a = argv[i];
     auto value = [&]() -> std::optional<std::string_view> {
@@ -180,6 +192,23 @@ std::string parse_args(int argc, char** argv, Options& o) {
       o.tuning_given = true;
     } else if (a == "--queue") {
       ok = num(o.queue) && o.queue > 0;
+    } else if (a == "--rate-limit") {
+      ok = num(o.rate_limit.rate_per_s) && o.rate_limit.rate_per_s >= 0.0;
+    } else if (a == "--rate-burst") {
+      ok = num(o.rate_limit.burst);
+    } else if (a == "--rate-sources") {
+      ok = num(o.rate_limit.max_sources);
+    } else if (a == "--reorder-window") {
+      ok = tuning(o.config.reorder_window_s);
+    } else if (a == "--max-time-ahead") {
+      ok = tuning(o.config.max_time_ahead_s);
+    } else if (a == "--assignment") {
+      const auto v = value();
+      o.tuning_given = true;
+      ok = v && (*v == "gnn" || *v == "greedy");
+      o.config.engine.association.method =
+          v && *v == "greedy" ? association::AssignmentMethod::Greedy
+                              : association::AssignmentMethod::GlobalNearestNeighbour;
     } else if (a == "--stats-interval") {
       ok = num(o.stats_interval_s) && o.stats_interval_s >= 0.0;
     } else if (a == "--pace") {
@@ -221,6 +250,9 @@ std::string parse_args(int argc, char** argv, Options& o) {
   }
   if (o.replay_file.empty() && !net::is_valid(o.config)) {
     return "invalid tracker parameters (see docs/design.md section 6 for the constraints)";
+  }
+  if (!net::is_valid(o.rate_limit)) {
+    return "invalid rate limit (--rate-burst must be >= 1 when --rate-limit is on)";
   }
   return {};
 }
@@ -289,7 +321,7 @@ void print_pipeline_stats(const net::Pipeline& p) {
       stderr,
       "sifted_fusiond: frames %llu, scans %llu, duplicates %llu, measurements %llu "
       "(updated %llu, started %llu, out-of-order %llu, track-limit %llu), live tracks %zu, "
-      "snapshots %llu\n",
+      "snapshots %llu; reorder held %zu (max %zu), late %llu, forced %llu; clock-gate %llu\n",
       static_cast<unsigned long long>(p.frames()), static_cast<unsigned long long>(p.scans()),
       static_cast<unsigned long long>(p.duplicates()),
       static_cast<unsigned long long>(e.measurements_processed()),
@@ -297,7 +329,10 @@ void print_pipeline_stats(const net::Pipeline& p) {
       static_cast<unsigned long long>(e.count(MeasurementOutcome::Initialized)),
       static_cast<unsigned long long>(e.count(MeasurementOutcome::OutOfOrder)),
       static_cast<unsigned long long>(e.count(MeasurementOutcome::TrackLimit)), e.tracks().size(),
-      static_cast<unsigned long long>(p.snapshots()));
+      static_cast<unsigned long long>(p.snapshots()), p.held(), p.held_high_water(),
+      static_cast<unsigned long long>(p.reorder_late()),
+      static_cast<unsigned long long>(p.reorder_forced()),
+      static_cast<unsigned long long>(p.future_rejected()));
 }
 
 int run_replay(const Options& o) {
@@ -392,6 +427,7 @@ int run_live(const Options& o) {
   net::UdpStats udp_stats;
   std::atomic<bool> stop{false};
   net::UdpReceiver receiver = std::move(udp.value());
+  receiver.set_rate_limit(o.rate_limit);
   std::fprintf(stderr, "sifted_fusiond: %zu sensors, listening on udp %s:%u\n",
                header.sensors.size(), o.listen_addr.c_str(),
                static_cast<unsigned>(receiver.port()));
@@ -435,11 +471,12 @@ int run_live(const Options& o) {
       next_stats += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
           std::chrono::duration<double>(o.stats_interval_s));
       std::fprintf(stderr,
-                   "sifted_fusiond: udp received %llu, rejected %llu, oversize %llu, queue-full "
-                   "drops %llu; ws clients %zu\n",
+                   "sifted_fusiond: udp received %llu, rejected %llu, oversize %llu, rate-limited "
+                   "%llu, queue-full drops %llu; ws clients %zu\n",
                    static_cast<unsigned long long>(udp_stats.received.load()),
                    static_cast<unsigned long long>(udp_stats.rejected.load()),
                    static_cast<unsigned long long>(udp_stats.oversize.load()),
+                   static_cast<unsigned long long>(udp_stats.rate_limited.load()),
                    static_cast<unsigned long long>(udp_stats.queue_full.load()),
                    out.ws ? out.ws->clients() : 0U);
       print_pipeline_stats(pipeline);

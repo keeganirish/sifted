@@ -2,6 +2,7 @@
 
 #include <Eigen/Core>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <variant>
 
@@ -58,6 +59,43 @@ std::optional<AnyLinearized> linearize(const MeasurementContext& c, const StateV
 // covariance. nullopt if S is not positive definite or inputs are non-finite.
 std::optional<double> mahalanobis2(const ConstantVelocityFilter& f,
                                    const AnyLinearized& l) noexcept;
+
+// Gate screen (M3 performance; docs/design.md section 10, ADR 0011): a cheap
+// test, per (measurement, track) pair, that is false only when the pair's
+// squared Mahalanobis distance is certainly greater than `limit`, so
+// linearize() and mahalanobis2() -- an atan2, a Jacobian, H P H^T and a
+// Cholesky per pair -- can be skipped. It never rejects a pair that could
+// gate, so association results are bit for bit those of the full
+// computation (checked by tests and by the engine fuzz target).
+//
+// With D the plane distance between the measured point and the track's
+// predicted position p, lambda the largest eigenvalue of the predicted
+// position covariance, and S = H P H^T + R:
+//   * for any SPD S, d^2 = y'S^-1 y >= y_i^2 / S_ii (Cauchy-Schwarz);
+//   * range-bearing: S_rr <= lambda + sigma_r^2, S_bb <= lambda / r^2 +
+//     sigma_b^2 (r: predicted range; |dh/dp| is 1 and 1/r), and
+//     D^2 = y_r^2 + 4 r_m r sin^2(y_b / 2) <= y_r^2 + r_m r y_b^2.
+//     So d^2 <= limit implies D^2 <= limit * (lambda (1 + r_m / r) +
+//     sigma_r^2 + r_m r sigma_b^2);
+//   * position (geodetic): S = P_pos + R, so d^2 >= D^2 / (lambda +
+//     lambda_max(R));
+//   * bearing-only: no screen (it would need the atan2 it is meant to save).
+// The bound is widened by a relative 1e-6 so floating-point rounding in the
+// full computation can never put a screened-out pair inside the limit.
+struct GateScreen {
+  enum class Kind : std::uint8_t { None, RangeBearing, Position };
+  Kind kind = Kind::None;
+  Eigen::Vector2d point = Eigen::Vector2d::Zero();  // measured position in the tracking frame
+  Eigen::Vector2d sensor = Eigen::Vector2d::Zero();
+  double range = 0.0;      // r_m
+  double var_range = 0.0;  // sigma_r^2 (range-bearing) or lambda_max(R) (position)
+  double var_bearing = 0.0;
+};
+GateScreen make_screen(const MeasurementContext& c) noexcept;
+// `position`: predicted track position; `lambda`: largest eigenvalue of its
+// 2x2 position covariance. True: compute the pair.
+bool may_gate(const GateScreen& s, const Eigen::Vector2d& position, double lambda,
+              double limit) noexcept;
 
 // Applies the linearised measurement to `f` (shared Joseph-form update).
 FilterStatus apply(ConstantVelocityFilter& f, const AnyLinearized& l) noexcept;

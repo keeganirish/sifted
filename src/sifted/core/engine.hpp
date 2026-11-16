@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "sifted/association/assignment.hpp"
 #include "sifted/association/lifecycle.hpp"
 #include "sifted/core/measurement.hpp"
 #include "sifted/core/outcome.hpp"
@@ -55,6 +56,13 @@ struct AssociationConfig {
   // Measurements with gate < d^2 <= near_miss_factor * gate are recorded in a
   // track's trace as near misses (no effect on association).
   double near_miss_factor = 4.0;
+  // Global nearest neighbour (the default); Greedy only for comparisons.
+  association::AssignmentMethod method = association::AssignmentMethod::GlobalNearestNeighbour;
+  // Skip the full gating computation for pairs that provably cannot be
+  // within near_miss_factor x gate (estimation::may_gate). Performance only:
+  // results are identical either way, so it is not recorded in event logs;
+  // false exists so tests and the engine fuzzer can prove that.
+  bool gate_screen = true;
 
   friend bool operator==(const AssociationConfig&, const AssociationConfig&) = default;
 };

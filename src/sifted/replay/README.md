@@ -6,4 +6,4 @@ Append-only event log of everything the engine thread consumed (frames and scan-
 - `replayer.hpp`: `replay(reader, pipeline)`.
 - `crc32.hpp`: CRC-32 (IEEE).
 
-Replaying a recorded run reproduces its output byte for byte (`tests/event_log_test.cpp`). Fuzz target: `fuzz/fuzz_event_log.cpp`.
+Replaying a recorded run reproduces its output byte for byte (`tests/event_log_test.cpp`; impaired runs with the M3 reorder stage and clock gate: `tests/reorder_test.cpp`). Parameters added in M3 are optional when reading, so M2 recordings still replay (ADR 0005). Fuzz targets: `fuzz/fuzz_event_log.cpp` (whole logs) and `fuzz/fuzz_log_header.cpp` (the header text parser).

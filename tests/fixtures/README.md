@@ -18,7 +18,9 @@ Small, curated, committed inputs. Large recordings belong in `recordings/` (git-
       then target id; `covered` is 1 when the target is inside the coverage of a
       sensor that can start tracks. Used by
       `tests/multi_target_regression_test.cpp` (`crossing_pair`, `close_pass`,
-      `enter_leave`). Rows are truth samples, not frames.
+      `enter_leave`, `formation_split`), and since M3 by the degraded-network,
+      fault-injection and gate-screen tests through `tests/scenario_support.hpp`.
+      Rows are truth samples, not frames.
 
     Layout 2 only appends columns, so M1 readers and fixtures are unaffected.
 
@@ -26,6 +28,15 @@ Small, curated, committed inputs. Large recordings belong in `recordings/` (git-
   baselines in the regression test headers:
 
   ```bash
-  cd sim && for s in straight_crossing turn crossing_pair close_pass enter_leave; do
+  cd sim && for s in straight_crossing turn crossing_pair close_pass enter_leave formation_split; do
     python3 -m sifted_sim.generate $s ../tests/fixtures/scenarios/$s; done
   ```
+
+- `impairment/golden.txt` (M3): the cross-language golden output of the
+  degraded-network model (ADR 0008) for `GOLDEN_CONFIG` in
+  `sim/sifted_sim/impair.py` applied to `scenarios/crossing_pair/frames.hex`,
+  each frame sent at its measurement time. One line per arrival
+  (`arrival_ns source_index duplicate`) after a `# stats` line. Checked by
+  `Impairment.MatchesPythonGoldenFixture` (C++) and `sim/tests/test_impair.py`.
+  Regenerate with `cd sim && python3 -m sifted_sim.impair --write-golden
+  ../tests/fixtures/impairment/golden.txt`; a change means the model changed.

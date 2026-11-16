@@ -70,6 +70,8 @@ bool is_valid(const EngineConfig& c) noexcept {
          std::isfinite(c.accel_psd * c.manoeuvre.accel_psd_factor) &&
          positive_finite(c.initial_velocity_sigma) && p > 0.0 && p < 1.0 &&
          c.association.near_miss_factor >= 1.0 && std::isfinite(c.association.near_miss_factor) &&
+         (c.association.method == association::AssignmentMethod::GlobalNearestNeighbour ||
+          c.association.method == association::AssignmentMethod::Greedy) &&
          association::is_valid(c.lifecycle) && c.max_tracks >= 1 &&
          (!c.origin || estimation::is_valid(*c.origin));
 }
@@ -238,10 +240,28 @@ void Engine::process_group(std::span<const Measurement> group,
     }
 
     const double near_factor = config_.association.near_miss_factor;
+    // Per-track inputs of the gate screen, computed once per group.
+    const bool screen = config_.association.gate_screen;
+    std::vector<double> lambda(screen ? live.size() : 0, 0.0);
+    std::vector<Eigen::Vector2d> predicted_pos(screen ? live.size() : 0, Eigen::Vector2d::Zero());
+    for (std::size_t k = 0; screen && k < live.size(); ++k) {
+      if (predicted[k]) {
+        lambda[k] = max_position_variance(predicted[k]->covariance());
+        predicted_pos[k] = predicted[k]->state().head<2>();
+      }
+    }
     std::vector<Candidate> candidates;
     for (std::size_t j = 0; j < accepted.size(); ++j) {
+      const estimation::GateScreen gs =
+          screen ? estimation::make_screen(accepted[j].ctx) : estimation::GateScreen{};
+      // The largest limit any pair of this measurement is tested against.
+      const double limit =
+          near_factor * gate(accepted[j].ctx.m->kind == SensorKind::BearingOnly ? 1 : 2);
       for (std::size_t k = 0; k < live.size(); ++k) {
         if (!predicted[k]) {
+          continue;
+        }
+        if (screen && !estimation::may_gate(gs, predicted_pos[k], lambda[k], limit)) {
           continue;
         }
         auto lin = estimation::linearize(accepted[j].ctx, predicted[k]->state());
@@ -316,8 +336,12 @@ void Engine::process_group(std::span<const Measurement> group,
           cell_cand[cell] = pair_cand[p];
           unassigned_cost = std::max(unassigned_cost, gate(estimation::dimension(cd.lin)));
         }
-        const std::vector<int> sol = association::solve_assignment(
-            cost, comp_rows.size(), comp_cols.size(), unassigned_cost);
+        const std::vector<int> sol =
+            config_.association.method == association::AssignmentMethod::Greedy
+                ? association::solve_assignment_greedy(cost, comp_rows.size(), comp_cols.size(),
+                                                       unassigned_cost)
+                : association::solve_assignment(cost, comp_rows.size(), comp_cols.size(),
+                                                unassigned_cost);
         for (std::size_t r = 0; r < comp_rows.size(); ++r) {
           if (sol[r] == association::kUnassigned) {
             continue;

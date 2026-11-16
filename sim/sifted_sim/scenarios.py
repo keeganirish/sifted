@@ -27,6 +27,21 @@ constrain the target from different directions.
     close_pass         Two targets on reciprocal headings in lanes 120 m apart
                        (about 5 radar cross-range sigmas at 5 km) pass each
                        other, plus a third, manoeuvring target elsewhere.
+    formation_split    Three targets fly in close line-abreast formation
+                       (lanes 45 m apart, ~3 radar range sigmas, so every
+                       scan's detections fall inside several tracks' gates),
+                       then split: the outer two turn away at 2 deg/s and
+                       fly off on diverging headings. Built to separate global
+                       nearest neighbour from greedy assignment (M3): a greedy
+                       pass takes the single closest pair first and regularly
+                       hands a track its neighbour's detection, which shows up
+                       as ID switches and broken tracks after the split.
+    demo               For the demo runbook (docs/demo.md), 150 s: a pair
+                       crossing at a shallow angle near the middle of
+                       coverage, one target flying in from outside coverage
+                       and one flying out of it, one turning, all seen by
+                       radar and camera. A network outage is added live by
+                       the impairment proxy (sifted_sim.impair --outage).
     enter_leave        Targets enter coverage, leave it, appear mid-run and
                        vanish mid-run (e.g. landing), with lower detection
                        probability (0.85), more clutter and a 6 s camera
@@ -162,5 +177,44 @@ def enter_leave() -> MultiScenario:
     return MultiScenario("enter_leave", [radar], [camera], targets, 120.0)
 
 
+def formation_split() -> MultiScenario:
+    lane, v = 45.0, 80.0
+    targets = []
+    # Flying east, north of the radar, so the lanes are separated along range
+    # (the radar's most precise direction, 10 m) and the formation stays well
+    # inside coverage throughout.
+    for tid, (dy, turn_deg) in ((1, (lane, 2.0)), (2, (0.0, 0.0)), (3, (-lane, -2.0))):
+        legs = [Straight(40.0)]
+        if turn_deg:
+            legs += [Turn(10.0, math.radians(turn_deg)), Straight(40.0)]
+        else:
+            legs += [Straight(50.0)]
+        targets.append(Target(tid, Trajectory(TargetState(-3500.0, 4500.0 + dy, v, 0.0), legs)))
+    camera = _camera(23, 6102, x_m=-6000.0, y_m=0.0, yaw_rad=math.radians(40.0))
+    return MultiScenario("formation_split", [_radar(13, 6101)], [camera], targets, 90.0)
+
+
+def demo() -> MultiScenario:
+    targets = []
+    # The crossing pair: through (2500, 3000) at t = 60 s, 30 deg apart.
+    cx, cy, t_x, v = 2500.0, 3000.0, 60.0, 60.0
+    for tid, heading in ((1, 15.0), (2, -15.0)):
+        h = math.radians(heading)
+        targets.append(Target(tid, _straight_from(cx - v * math.cos(h) * t_x,
+                                                  cy - v * math.sin(h) * t_x, heading, v, 150.0)))
+    # Inbound from beyond the 8 km coverage edge (enters at ~t = 20 s)...
+    targets.append(Target(3, _straight_from(9500.0, -2000.0, 170.0, 80.0, 150.0)))
+    # ...outbound, leaving coverage at ~t = 95 s...
+    targets.append(Target(4, _straight_from(-1000.0, -1500.0, -120.0, 70.0, 150.0)))
+    # ...and a turning one.
+    targets.append(Target(5, Trajectory(TargetState(-5000.0, 1000.0, 70.0, 0.0),
+                                        [Straight(50.0), Turn(30.0, -math.radians(3.0)),
+                                         Straight(70.0)])))
+    camera = _camera(24, 7102, x_m=-4000.0, y_m=4000.0, yaw_rad=-math.pi / 4,
+                     fov_rad=math.radians(150.0))
+    return MultiScenario("demo", [_radar(14, 7101)], [camera], targets, 150.0)
+
+
 SCENARIOS = {s.__name__: s for s in (straight_crossing, turn)}
-MULTI_SCENARIOS = {s.__name__: s for s in (crossing_pair, close_pass, enter_leave)}
+MULTI_SCENARIOS = {s.__name__: s for s in (crossing_pair, close_pass, enter_leave,
+                                                 formation_split, demo)}

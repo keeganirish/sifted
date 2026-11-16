@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <string_view>
 #include <vector>
 
 // Optimal (global nearest neighbour) assignment of measurements to tracks.
@@ -28,6 +30,19 @@ inline constexpr int kUnassigned = -1;
 // the assigned column or kUnassigned.
 std::vector<int> solve_assignment(const std::vector<double>& cost, std::size_t rows,
                                   std::size_t cols, double unassigned_cost);
+
+// Greedy nearest neighbour, for comparison only (ADR 0004): repeatedly takes
+// the cheapest remaining pair (ties: lowest row, then lowest column) while it
+// costs less than leaving its row unassigned. Same arguments and result as
+// solve_assignment; not optimal.
+std::vector<int> solve_assignment_greedy(const std::vector<double>& cost, std::size_t rows,
+                                         std::size_t cols, double unassigned_cost);
+
+// Which solver the engine uses. Global nearest neighbour is the default and
+// the only one meant for operation; Greedy exists so tests and benchmarks can
+// show what the global solve buys.
+enum class AssignmentMethod : std::uint8_t { GlobalNearestNeighbour, Greedy };
+std::string_view to_string(AssignmentMethod m) noexcept;
 
 // Splits a bipartite candidate graph into connected components so each can be
 // solved independently (far cheaper than one large problem, same answer).

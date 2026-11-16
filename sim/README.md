@@ -9,9 +9,11 @@ Sensor simulators and scenario generators (Python, standard library only for now
 | `radar` | range-bearing radar with configurable pose, noise, rate and seed; multi-target scans with coverage, detection probability, clutter and dropouts |
 | `camera` | bearing-only sensor with pose, noise, rate, phase, field of view, detection probability and dropouts |
 | `sensors` | sensor table writer/reader (`sifted-sensors 1`, ADR 0003) |
-| `scenarios` | named, reproducible scenarios: single-target `straight_crossing`, `turn`; multi-target `crossing_pair`, `close_pass`, `enter_leave` |
+| `scenarios` | named, reproducible scenarios: single-target `straight_crossing`, `turn`; multi-target `crossing_pair`, `close_pass`, `enter_leave`, `formation_split` (GNN vs greedy, M3), `demo` (docs/demo.md) |
 | `generate` | CLI that writes a scenario's `sensors.cfg`, `frames.hex`, `truth.csv` |
-| `send` | sends a scenario's frames to `sifted_fusiond` over UDP, real time or accelerated |
+| `send` | sends a scenario's frames to `sifted_fusiond` over UDP, real time or accelerated, optionally with injected sensor faults (`--fault`) |
+| `impair` | the degraded-network model (ADR 0008; exact mirror of `src/sifted/net/impairment.hpp`) and a live UDP impairment proxy |
+| `faults` | seeded sensor faults: dropout, intermittent, restart, clock offset/drift, bias, stuck (M3) |
 | `adsb` | OpenSky Network adapter: state vectors -> GeoPosition frames over UDP (ADR 0007) |
 
 Determinism: noise uses `random.Random(seed).random()` (stable across Python
@@ -29,7 +31,14 @@ python3 -m sifted_sim.generate --list                        # scenario names
 python3 -m sifted_sim.generate turn ../tests/fixtures/scenarios/turn
 python3 -m sifted_sim.send crossing_pair --target 127.0.0.1:5600 --speed 5
 python3 -m sifted_sim.adsb --from-file tests/samples/opensky_states_sample.json --print
+# live impairment between sender and daemon (ADR 0008):
+python3 -m sifted_sim.impair --listen 127.0.0.1:5601 --target 127.0.0.1:5600 \
+    --seed 7 --loss 0.03 --burst 0.01 0.25 0.6 --jitter-ms 400 --duplicate 0.02 --outage 30:38
+python3 -m sifted_sim.send crossing_pair --target 127.0.0.1:5601 --fault clock:20:+2
 ```
+
+`tests/test_adsb_fuzz.py` property-tests the OpenSky adapter with random and
+mutated JSON (standard library only).
 
 `tests/samples/opensky_states_sample.json` is a hand-written response in the
 format documented by OpenSky (not a captured one; no network access was

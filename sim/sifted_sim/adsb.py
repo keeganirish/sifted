@@ -74,6 +74,11 @@ M_PER_DEG_LAT = 111_320.0
 MIN_ALT_M, MAX_ALT_M = -1000.0, 100000.0  # same bounds as the C++ is_valid()
 
 
+# Largest time_position whose nanosecond timestamp fits the wire format's
+# int64 (found by tests/test_adsb_fuzz.py: a larger one made encode() raise).
+MAX_TIME_POSITION_S = (2 ** 63 - 1) // 1_000_000_000
+
+
 def credit_cost(lamin: float, lamax: float, lomin: float, lomax: float) -> int:
     """API credits per /states/all call for a bounding box (documented tiers)."""
     area = abs(lamax - lamin) * abs(lomax - lomin)
@@ -133,7 +138,8 @@ class Adapter:
                     reason = "bad_icao24"
                 elif tpos is None or lat is None or lon is None:
                     reason = "no_position"
-                elif not (isinstance(tpos, int) and not isinstance(tpos, bool) and tpos > 0 and
+                elif not (isinstance(tpos, int) and not isinstance(tpos, bool) and
+                          0 < tpos <= MAX_TIME_POSITION_S and
                           _is_num(lat) and _is_num(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
                     reason = "bad_position"
                 elif not isinstance(f["on_ground"], bool):

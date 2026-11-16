@@ -66,6 +66,53 @@ std::optional<double> mahalanobis2(const ConstantVelocityFilter& f,
   return std::visit([&f](const auto& v) { return f.mahalanobis2(v.y, v.H, v.R); }, l);
 }
 
+GateScreen make_screen(const MeasurementContext& c) noexcept {
+  GateScreen s;
+  const Measurement& m = *c.m;
+  if (m.kind == SensorKind::RangeBearing) {
+    const double a = c.pose.yaw_rad + m.z[1];
+    s.kind = GateScreen::Kind::RangeBearing;
+    s.sensor = {c.pose.x_m, c.pose.y_m};
+    s.range = m.z[0];
+    s.point = s.sensor + s.range * Eigen::Vector2d(std::cos(a), std::sin(a));
+    s.var_range = m.sigma[0] * m.sigma[0];
+    s.var_bearing = m.sigma[1] * m.sigma[1];
+  } else if (m.kind == SensorKind::GeoPosition && c.local) {
+    const Eigen::Matrix2d& R = c.local->covariance;
+    const double half_trace = 0.5 * (R(0, 0) + R(1, 1));
+    const double disc =
+        std::sqrt(0.25 * (R(0, 0) - R(1, 1)) * (R(0, 0) - R(1, 1)) + R(0, 1) * R(0, 1));
+    s.kind = GateScreen::Kind::Position;
+    s.point = c.local->position;
+    s.var_range = half_trace + disc;
+  }
+  if (!s.point.allFinite() || !std::isfinite(s.var_range) || !std::isfinite(s.var_bearing)) {
+    s.kind = GateScreen::Kind::None;  // never screen what cannot be bounded
+  }
+  return s;
+}
+
+bool may_gate(const GateScreen& s, const Eigen::Vector2d& position, double lambda,
+              double limit) noexcept {
+  constexpr double kSafety = 1.0 + 1e-6;
+  if (s.kind == GateScreen::Kind::None || !(lambda >= 0.0) || !std::isfinite(lambda) ||
+      !position.allFinite()) {
+    return true;
+  }
+  const double d2 = (s.point - position).squaredNorm();
+  double bound = 0.0;
+  if (s.kind == GateScreen::Kind::Position) {
+    bound = limit * (lambda + s.var_range);
+  } else {
+    const double r = (position - s.sensor).norm();
+    if (!(r > 0.0)) {
+      return true;
+    }
+    bound = limit * (lambda * (1.0 + s.range / r) + s.var_range + s.range * r * s.var_bearing);
+  }
+  return !(d2 > kSafety * bound) || !std::isfinite(bound);
+}
+
 FilterStatus apply(ConstantVelocityFilter& f, const AnyLinearized& l) noexcept {
   return std::visit(
       [&f](const auto& v) {

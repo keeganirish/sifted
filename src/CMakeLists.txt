@@ -17,6 +17,7 @@ add_library(sifted_core STATIC
   sifted/estimation/measurement_model.cpp
   sifted/estimation/range_bearing.cpp
   sifted/net/dedup.cpp
+  sifted/net/impairment.cpp
   sifted/net/ingest.cpp
   sifted/net/snapshot.cpp
   sifted/replay/crc32.cpp
@@ -30,6 +31,7 @@ add_library(sifted_core STATIC
 add_library(sifted_net STATIC
   sifted/net/sha1.cpp
   sifted/net/system_clock.cpp
+  sifted/net/rate_limit.cpp
   sifted/net/udp.cpp
   sifted/net/websocket.cpp)
 add_library(sifted::net ALIAS sifted_net)

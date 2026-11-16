@@ -134,4 +134,43 @@ std::vector<Component> connected_components(
   return out;
 }
 
+std::vector<int> solve_assignment_greedy(const std::vector<double>& cost, std::size_t rows,
+                                         std::size_t cols, double unassigned_cost) {
+  std::vector<int> out(rows, kUnassigned);
+  std::vector<char> col_taken(cols, 0);
+  while (true) {
+    std::size_t best_r = rows;
+    std::size_t best_c = cols;
+    double best = unassigned_cost;
+    for (std::size_t r = 0; r < rows; ++r) {
+      if (out[r] != kUnassigned) {
+        continue;
+      }
+      for (std::size_t c = 0; c < cols; ++c) {
+        const double v = cost[r * cols + c];
+        if (col_taken[c] == 0 && v < best) {
+          best = v;
+          best_r = r;
+          best_c = c;
+        }
+      }
+    }
+    if (best_r == rows) {
+      return out;
+    }
+    out[best_r] = static_cast<int>(best_c);
+    col_taken[best_c] = 1;
+  }
+}
+
+std::string_view to_string(AssignmentMethod m) noexcept {
+  switch (m) {
+    case AssignmentMethod::GlobalNearestNeighbour:
+      return "gnn";
+    case AssignmentMethod::Greedy:
+      return "greedy";
+  }
+  return "unknown";
+}
+
 }  // namespace sifted::association

@@ -6,14 +6,21 @@ add_executable(sifted_tests
   clock_test.cpp
   engine_test.cpp
   estimation_test.cpp
+  fault_injection_test.cpp
   event_log_test.cpp
+  degraded_network_test.cpp
+  gate_screen_test.cpp
   geodetic_test.cpp
+  impairment_test.cpp
   ingest_test.cpp
   measurement_test.cpp
   multi_target_regression_test.cpp
+  reorder_test.cpp
+  scenario_support.cpp
   scenario_regression_test.cpp
   sensor_table_test.cpp
   track_store_test.cpp
+  udp_flood_test.cpp
   websocket_test.cpp
   wire_codec_test.cpp)
 target_link_libraries(sifted_tests PRIVATE sifted::core sifted::net sifted_options GTest::gtest_main)

@@ -44,11 +44,40 @@ bool parse_num(std::string_view s, T& out) noexcept {
 }
 
 // Every recorded parameter: its key, how to print it, and how to read it back.
+// `optional` marks parameters added after the first recordings were made
+// (M3): a header without them is read with their defaults, which reproduce
+// the earlier behaviour exactly, so older logs still replay. Writers always
+// record every parameter.
 struct Param {
   std::string_view key;
   std::function<std::string(const net::PipelineConfig&)> get;
   std::function<bool(net::PipelineConfig&, std::string_view)> set;
+  bool optional = false;
 };
+
+Param added_later(Param p) {
+  p.optional = true;
+  return p;
+}
+
+Param assignment_method() {
+  using association::AssignmentMethod;
+  return {
+      "assignment",
+      [](const net::PipelineConfig& c) {
+        return std::string(association::to_string(c.engine.association.method));
+      },
+      [](net::PipelineConfig& c, std::string_view v) {
+        for (const auto m : {AssignmentMethod::GlobalNearestNeighbour, AssignmentMethod::Greedy}) {
+          if (v == association::to_string(m)) {
+            c.engine.association.method = m;
+            return true;
+          }
+        }
+        return false;
+      },
+      true};
+}
 
 Param dbl(std::string_view key, std::function<double&(net::PipelineConfig&)> ref) {
   return {key,
@@ -103,6 +132,12 @@ const std::vector<Param>& params() {
       dbl("snapshot_interval_s", [](C& c) -> double& { return c.snapshot_interval_s; }),
       uns<std::size_t>("dedup_window", [](C& c) -> std::size_t& { return c.dedup_window; }),
       uns<std::size_t>("max_scan_size", [](C& c) -> std::size_t& { return c.max_scan_size; }),
+      // Added in M3 (optional when reading; see Param).
+      assignment_method(),
+      added_later(dbl("reorder_window_s", [](C& c) -> double& { return c.reorder_window_s; })),
+      added_later(uns<std::size_t>("reorder_capacity",
+                                   [](C& c) -> std::size_t& { return c.reorder_capacity; })),
+      added_later(dbl("max_time_ahead_s", [](C& c) -> double& { return c.max_time_ahead_s; })),
   };
   return p;
 }
@@ -202,8 +237,10 @@ Result<RunHeader, LogError> parse_header(std::string_view text) {
         return LogError::BadHeader;
       }
       h.sensors = table.value();
-      if (std::find(seen.begin(), seen.end(), 0) != seen.end()) {
-        return LogError::BadHeader;  // a parameter is missing
+      for (std::size_t i = 0; i < seen.size(); ++i) {
+        if (seen[i] == 0 && !params()[i].optional) {
+          return LogError::BadHeader;  // a required parameter is missing
+        }
       }
       if (!net::is_valid(h.config)) {
         return LogError::BadHeader;
