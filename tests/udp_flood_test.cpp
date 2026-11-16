@@ -136,6 +136,20 @@ struct Harness {
   }
 };
 
+// Flow control for the burst tests: blocks while more than 32 sent datagrams
+// are still unaccounted for, i.e. waiting in the kernel's receive buffer.
+// Without it a slow receiver (sanitizer builds, CI runners whose rmem_max caps
+// SO_RCVBUF near 200 KB) loses datagrams in the kernel before the code under
+// test sees them, and the tests would measure the kernel instead of the
+// receiver. Bursts still far outrun the rate limits being tested.
+void pace(const Harness& h, std::uint64_t sent) {
+  constexpr std::uint64_t kInFlight = 32;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (sent > h.accounted() + kInFlight && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+}
+
 // Waits until the receiver has accounted for `n` datagrams or a deadline.
 void await_accounted(const Harness& h, std::uint64_t n) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -181,10 +195,14 @@ TEST(UdpFlood, DuplicateFloodFromOneSourceDoesNotStarveAnother) {
   const auto dup = frame(1, 7, kS);  // one datagram, replayed 20000 times
   constexpr int kFlood = 20000;
   constexpr int kHonest = 40;
+  std::uint64_t sent = 0;
   for (int i = 0; i < kFlood; ++i) {
+    pace(h, sent);
     flooder.send(port, dup);
+    ++sent;
     if (i % (kFlood / kHonest) == 0) {
       honest.send(port, frame(2, static_cast<std::uint32_t>(i), kS + i));
+      ++sent;
     }
   }
   await_accounted(h, kFlood + kHonest);
@@ -228,6 +246,7 @@ TEST(UdpFlood, MalformedBurstIsRejectedAndNeverQueued) {
       d[11] = 0x5A;  // the payload's reserved byte must be zero
     }
     oversize += d.size() > wire::kHeaderSize + wire::kMaxPayloadSize ? 1U : 0U;
+    pace(h, static_cast<std::uint64_t>(i));
     s.send(h.rx.port(), d);
   }
   await_accounted(h, kBurst);
