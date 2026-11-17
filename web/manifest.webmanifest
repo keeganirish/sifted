@@ -1,0 +1,12 @@
+{
+  "name": "Sifted",
+  "short_name": "Sifted",
+  "description": "Multi-sensor track fusion",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b1017",
+  "theme_color": "#10161f",
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

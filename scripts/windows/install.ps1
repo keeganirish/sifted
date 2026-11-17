@@ -18,7 +18,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
-function Step($n, $text) { Write-Host ""; Write-Host "[$n/4] $text" -ForegroundColor Cyan }
+function Step($n, $text) { Write-Host ""; Write-Host "[$n/5] $text" -ForegroundColor Cyan }
 function Ok($text)   { Write-Host "  + $text" -ForegroundColor Green }
 function Info($text) { Write-Host "  - $text" -ForegroundColor DarkGray }
 function Warn($text) { Write-Host "  ! $text" -ForegroundColor Yellow }
@@ -171,11 +171,118 @@ if ($p.ExitCode -ne 0) {
 }
 Ok "Sifted starts from Windows"
 
-# --------------------------------------------------------------------------- 4. shortcuts
-Step 4 "Adding shortcuts"
+# --------------------------------------------------------------------------- 4. app window
+Step 4 "Setting up the Sifted window"
+# Sifted's window is WebView2 (the Edge engine that ships with Windows) hosted
+# in a native window, so it has its own sharp taskbar icon. That needs
+# Microsoft's WebView2 SDK, downloaded from NuGet and accepted only if its DLLs
+# carry a valid Microsoft signature. Optional: without it, Sifted opens in an
+# Edge app window instead.
+$Wv2 = Join-Path $Root "build\webview2"
+function Test-Wv2Files {
+    foreach ($f in @("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll")) {
+        $path = Join-Path $Wv2 $f
+        if (-not (Test-Path $path)) { return $false }
+        $sig = Get-AuthenticodeSignature $path
+        if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "O=Microsoft Corporation") { return $false }
+    }
+    return $true
+}
+function Install-Wv2 {
+    $arch = switch ($env:PROCESSOR_ARCHITECTURE) { "ARM64" { "win-arm64" } "x86" { "win-x86" } default { "win-x64" } }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $feed = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2"
+    $versions = (Invoke-RestMethod -Uri "$feed/index.json" -UseBasicParsing).versions | Where-Object { $_ -notmatch "-" }
+    $version = $versions[-1]
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("sifted-webview2-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    try {
+        $zip = Join-Path $tmp "webview2.zip"   # a .nupkg is a zip; Expand-Archive wants the extension
+        Invoke-WebRequest -Uri "$feed/$version/microsoft.web.webview2.$version.nupkg" -OutFile $zip -UseBasicParsing
+        Expand-Archive -Path $zip -DestinationPath (Join-Path $tmp "pkg") -Force
+        $pkg = Join-Path $tmp "pkg"
+        $lib = @("lib\net462", "lib\net45") | ForEach-Object { Join-Path $pkg $_ } | Where-Object { Test-Path (Join-Path $_ "Microsoft.Web.WebView2.WinForms.dll") } | Select-Object -First 1
+        $loader = Join-Path $pkg "runtimes\$arch\native\WebView2Loader.dll"
+        if (-not $lib -or -not (Test-Path $loader)) { throw "unexpected package layout in WebView2 $version" }
+        if (Test-Path $Wv2) { Remove-Item -Recurse -Force $Wv2 }
+        New-Item -ItemType Directory -Force -Path $Wv2 | Out-Null
+        Copy-Item (Join-Path $lib "Microsoft.Web.WebView2.Core.dll"), (Join-Path $lib "Microsoft.Web.WebView2.WinForms.dll"), $loader -Destination $Wv2
+        Set-Content -Path (Join-Path $Wv2 "VERSION.txt") -Value "Microsoft.Web.WebView2 $version ($arch)" -Encoding ASCII
+    } finally {
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    }
+}
+function Test-Wv2Runtime {
+    $guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    foreach ($k in @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$guid",
+                     "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$guid",
+                     "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$guid")) {
+        $pv = (Get-ItemProperty -Path $k -Name pv -ErrorAction SilentlyContinue).pv
+        if ($pv -and $pv -ne "0.0.0.0") { return $true }
+    }
+    return $false
+}
+if (Test-Wv2Files) {
+    Ok "WebView2 SDK already set up"
+} else {
+    try {
+        Install-Wv2
+        if (Test-Wv2Files) { Ok "WebView2 SDK downloaded and verified ($((Get-Content (Join-Path $Wv2 'VERSION.txt')).Trim()))" }
+        else {
+            Remove-Item -Recurse -Force $Wv2 -ErrorAction SilentlyContinue
+            Warn "The downloaded WebView2 files failed the signature check and were removed; Sifted will open in an Edge app window."
+        }
+    } catch {
+        Remove-Item -Recurse -Force $Wv2 -ErrorAction SilentlyContinue
+        Warn "Couldn't set up WebView2 ($($_.Exception.Message)); Sifted will open in an Edge app window."
+    }
+}
+if ((Test-Path $Wv2) -and -not (Test-Wv2Runtime)) {
+    Warn "The WebView2 runtime isn't installed; Sifted will open in an Edge app window. (It comes with Windows 11; on Windows 10 it installs with Microsoft Edge updates.)"
+}
+
+# --------------------------------------------------------------------------- 5. shortcuts
+Step 5 "Adding shortcuts"
 if ($NoShortcut) {
     Info "Skipped"
 } else {
+    # Gives a shortcut the same taskbar identity (AppUserModelID) as Sifted's
+    # window, so a pinned shortcut and the running window share one taskbar button
+    # with the shortcut's icon.
+    if (-not ("SiftedShortcut" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class SiftedShortcut {
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    struct PropertyKey { public Guid fmtid; public uint pid; }
+    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    struct PropVariant { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }
+    [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPropertyStore {
+        void GetCount(out uint count);
+        void GetAt(uint index, out PropertyKey key);
+        void GetValue(ref PropertyKey key, out PropVariant value);
+        void SetValue(ref PropertyKey key, ref PropVariant value);
+        void Commit();
+    }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr bindCtx, int flags, ref Guid riid,
+        [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+    public static void SetAppId(string lnk, string appId) {
+        Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+        IPropertyStore store;
+        SHGetPropertyStoreFromParsingName(lnk, IntPtr.Zero, 2 /* GPS_READWRITE */, ref iid, out store);
+        try {
+            PropertyKey key = new PropertyKey { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
+            PropVariant value = new PropVariant { vt = 31 /* VT_LPWSTR */, p = Marshal.StringToCoTaskMemUni(appId) };
+            try { store.SetValue(ref key, ref value); store.Commit(); }
+            finally { Marshal.FreeCoTaskMem(value.p); }
+        } finally { Marshal.ReleaseComObject(store); }
+    }
+}
+"@
+    }
     $shell = New-Object -ComObject WScript.Shell
     $targets = @(
         (Join-Path ([Environment]::GetFolderPath("Desktop")) "Sifted.lnk"),
@@ -192,6 +299,8 @@ if ($NoShortcut) {
         $icon = Join-Path $Root "app\assets\sifted.ico"
         if (Test-Path $icon) { $lnk.IconLocation = $icon }
         $lnk.Save()
+        try { [SiftedShortcut]::SetAppId($t, "Sifted.OperatorView") }
+        catch { Warn "Couldn't set the taskbar identity on $(Split-Path $t -Leaf): $($_.Exception.Message)" }
     }
     Ok "Desktop and Start menu shortcuts: Sifted"
 }

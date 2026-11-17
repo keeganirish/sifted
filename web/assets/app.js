@@ -633,6 +633,9 @@ $("quitBtn").onclick = async () => {
   ui.stopped = true;
   if (ws) { ws.onclose = null; ws.close(); }
   clearTimeout(wsTimer);
+  // In Sifted's own window (Windows) or an app window this closes it; a normal
+  // browser tab ignores it and keeps the "stopped" message.
+  setTimeout(() => window.close(), 400);
 };
 
 // ------------------------------------------------------------------ start-up

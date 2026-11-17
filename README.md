@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/assets/sifted.png" width="88" alt="Sifted logo">
+  <img src="web/assets/icon.svg" width="88" alt="Sifted logo">
 </p>
 
 <h1 align="center">Sifted</h1>
@@ -111,10 +111,11 @@ the same as `install.cmd -Yes -WithTests`.
 ## Using Sifted
 
 Start Sifted from its shortcut. It opens in its own window, with no browser
-tabs or address bar, and closing that window stops Sifted. (The window is a
-Chrome or Edge "app window"; Edge comes with Windows. Without either, Sifted
-opens in a normal browser tab instead.) You can also press **Quit**, the power
-button at the top right.
+tabs or address bar, and closing that window stops Sifted. You can also press
+**Quit**, the power button at the top right. On Windows the window is native,
+built on WebView2 (the Edge engine that ships with Windows), so it has its own
+taskbar icon. On macOS and Linux it's a Chrome or Edge "app window", or a normal
+browser tab if neither is installed.
 
 From a terminal, `./sifted` (Windows: `sifted.cmd`) starts Sifted with its
 messages visible; it then runs until you press Ctrl+C or Quit. The operator

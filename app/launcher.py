@@ -158,7 +158,8 @@ def pick_port(preferred: int, kind: int, taken: set[int], tries: int = 50) -> in
     raise SystemExit(f"sifted: no free port near {preferred}; pass another with the options")
 
 
-APP_WINDOW_ARGS = ["--window-size=1440,900"]
+# Open maximized (windowed fullscreen); the window size is what Restore returns to.
+APP_WINDOW_ARGS = ["--start-maximized", "--window-size=1440,900"]
 
 
 def _windows_path(win_path: str) -> pathlib.Path | None:
@@ -801,6 +802,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     server_version = "Sifted/" + VERSION
     session: Session
     app: "App"
+
+    extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map,
+                      ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json"}
 
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(WEB_DIR), **kw)

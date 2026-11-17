@@ -427,7 +427,7 @@ Name=Sifted
 Comment=Multi-sensor track fusion
 Exec="$ROOT/sifted" --background
 Path=$ROOT
-Icon=$ROOT/app/assets/sifted.png
+Icon=$ROOT/web/assets/icon.svg
 Terminal=false
 Categories=Science;Education;
 EOF
