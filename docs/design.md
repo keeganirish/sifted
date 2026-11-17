@@ -158,6 +158,56 @@ formation_split separates GNN from greedy assignment; across other noise
 seeds greedy broke identity in all and GNN in some (the geometry is
 genuinely ambiguous), see `tests/multi_target_regression_test.cpp`.
 
+### Filter consistency
+
+Does the covariance mean what the map's 1-sigma circle claims?
+`tests/consistency_test.cpp` measures NEES (`e^T P^-1 e` against truth;
+4-dof full state and 2-dof position) and NIS (the engine's own gating `d^2`
+of every associated update, read from the track trace). It uses the
+RMSE's matched target-instants, past the same 10 s burn-in. The 95%
+interval for an average of N samples is chi-square(N n) / N. Each scenario
+is one run with strongly time-correlated samples, so on the fixtures that
+interval is a guide, not an exact test (`tests/consistency.hpp`).
+
+**Matched model, Monte Carlo** (200 independent runs; truth driven by the
+filter's own `q = 4` white acceleration; one range-bearing radar at 5 km;
+manoeuvre switching off). At t = 90 s: NEES4 posterior 4.02, prior 3.84,
+NEES2 2.03, against the 95% interval [3.62, 4.40] for 4 dof and
+[1.73, 2.29] for 2 dof. NIS is 2.001 over 16,184 updates, interval
+[1.969, 2.031]. **The filter is consistent when its model is right.** These
+values are asserted.
+
+**Fixture scenarios** (default configuration; "upd." is an estimate at its own
+update instant, "extr." is predicted forward or coasting; the interval is
+for the updated NEES4):
+
+| scenario | truth | NEES4 upd. (95%) | NEES4 extr. | NEES2 upd. | NIS range-bearing (exp. 2) | NIS bearing (exp. 1) |
+|---|---|---|---|---|---|---|
+| straight_crossing | straight | 1.65 [3.41, 4.64] | n/a | 1.24 | 1.52 | n/a |
+| crossing_pair | straight | 2.29 [3.56, 4.47] | 1.97 | 1.71 | 1.91 | 0.85 |
+| enter_leave | straight | 2.16 [3.65, 4.37] | 1.77 | 1.66 | 1.75 | 0.86 |
+| turn | 3 deg/s turn | 3.79 [3.41, 4.64] | n/a | 2.30 | 2.29 | n/a |
+| close_pass | 1 of 3 turns | 2.77 [3.63, 4.39] | 3.54 | 1.90 | 2.08 | 0.95 |
+| formation_split | 2 of 3 turn | 2.86 [3.64, 4.38] | 2.64 | 1.88 | 1.80 | 0.84 |
+| demo | 1 of 5 turns | 2.09 [3.77, 4.24] | 1.98 | 1.51 | 1.79 | 0.94 |
+
+In straight flight the filter is **pessimistic**. NEES4 is about half its
+expected value, while NEES2 and NIS are 10-25% low. The cause is model
+mismatch, not a defect: the simulator flies exactly straight legs (zero
+acceleration), while the filter budgets for white acceleration of PSD `q`. At
+steady state about half of `P` is that budget, for any `q > 0`. A
+sweep down to `q = 0.05` leaves the straight scenarios' NEES4 at 1.7-2.4,
+and Monte Carlo with zero-acceleration truth gives 1.7-2.3 at every time.
+Velocity is the most over-covered state. The 1-sigma position circle is only
+3-27% too large in radius (`sqrt(2 / NEES2)`). In turns
+the same `q` plus NIS switching makes the filter roughly consistent (turn:
+3.79; close_pass's turning target: 4.48). Without switching, turn rises to
+5.43, which is optimistic. Tests assert "not optimistic" for straight
+scenarios, which are identified from the truth, and only loose sanity limits
+for manoeuvring ones. No default is changed. An honest straight-flight
+covariance needs a low-`q` model mixed with a manoeuvre model (IMM), not a
+smaller `q`, which breaks turns (turn NEES4 9.0 at `q = 1`).
+
 ## 8. Parameters
 
 Everything below is in `PipelineConfig` (and recorded in every event log

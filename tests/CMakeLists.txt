@@ -4,6 +4,8 @@ add_executable(sifted_tests
   association_test.cpp
   bearing_only_test.cpp
   clock_test.cpp
+  consistency.cpp
+  consistency_test.cpp
   engine_test.cpp
   estimation_test.cpp
   fault_injection_test.cpp

@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "sifted/association/assignment.hpp"
+#include "sifted/association/gating.hpp"
 #include "sifted/net/ingest.hpp"
 #include "sifted/wire/codec.hpp"
 
@@ -169,6 +170,7 @@ void Scorer::score(std::size_t i, const Engine& engine) {
   InstantRecord rec;
   rec.time_ns = t;
   std::vector<char> matched_track(reported.size(), 0);
+  std::vector<char> nis_scored(reported.size(), 0);  // matched to a target past burn-in
   for (std::size_t a = 0; a < now.size(); ++a) {
     const int tgt = now[a].target;
     rec.covered[tgt] = now[a].covered;
@@ -196,7 +198,26 @@ void Scorer::score(std::size_t i, const Engine& engine) {
       const TrackEstimate& e = reported[static_cast<std::size_t>(match[a])];
       sq_[tgt] += std::pow(e.state(0) - now[a].x, 2) + std::pow(e.state(1) - now[a].y, 2);
       ++s_.rmse_n[tgt];
+
+      // Consistency: same samples as the RMSE.
+      const estimation::StateVector err =
+          e.state - estimation::StateVector(now[a].x, now[a].y, now[a].vx, now[a].vy);
+      const double full = nees(err, e.covariance);
+      const double pos = nees(err.head<2>(), e.covariance.topLeftCorner<2, 2>());
+      EXPECT_TRUE(std::isfinite(full) && std::isfinite(pos)) << "track " << e.id << " at " << t;
+      const bool updated = e.last_update.ns == t;
+      for (NeesByRegime* agg : {&s_.nees, &s_.nees_by_target[tgt]}) {
+        NeesStats& st = updated ? agg->updated : agg->extrapolated;
+        st.full.add(full, static_cast<std::size_t>(err.size()));
+        st.position.add(pos, 2);
+      }
+      nis_scored[static_cast<std::size_t>(match[a])] = 1;
     }
+  }
+  // Tracks not matched at a scored target-instant still have their trace read,
+  // so their earlier updates are not credited to a later match.
+  for (std::size_t j = 0; j < reported.size(); ++j) {
+    collect_nis(engine, reported[j].id, nis_scored[j] != 0);
   }
   for (std::size_t j = 0; j < reported.size(); ++j) {
     auto& c = track_counts_[reported[j].id];
@@ -205,6 +226,53 @@ void Scorer::score(std::size_t i, const Engine& engine) {
     s_.trace.push_back(reported[j]);
   }
   s_.instants.push_back(std::move(rec));
+}
+
+void Scorer::collect_nis(const Engine& engine, TrackId track, bool score) {
+  const store::TrackRecord* r = engine.store().find(track);
+  if (r == nullptr) {
+    return;
+  }
+  const std::uint64_t total =
+      r->totals[static_cast<std::size_t>(store::TraceEventKind::Associated)];
+  std::uint64_t& read = nis_read_[track];
+  std::uint64_t fresh = total - read;
+  read = total;
+  // The newest `fresh` Associated events, oldest first.
+  std::vector<const store::TraceEvent*> events;
+  for (std::size_t i = r->recent.size(); i-- > 0 && events.size() < fresh;) {
+    if (r->recent.at(i).kind == store::TraceEventKind::Associated) {
+      events.push_back(&r->recent.at(i));
+    }
+  }
+  s_.nis_lost += fresh - events.size();
+  if (!score) {
+    return;
+  }
+  for (auto it = events.rbegin(); it != events.rend(); ++it) {
+    const store::TraceEvent& e = **it;
+    const auto idx = engine.sensors().index_of(e.sensor);
+    EXPECT_TRUE(idx.has_value()) << "sensor " << e.sensor;
+    if (!idx) {
+      continue;
+    }
+    // Degrees of freedom from the data: the gate the engine compared d^2 to is
+    // the chi-square quantile of the measurement's dimension, so find the dof
+    // that reproduces it exactly (same function, same inputs).
+    auto [dof_it, inserted] = dof_of_gate_.try_emplace(e.gate, 0);
+    if (inserted) {
+      const double p = engine.config().association.gate_probability;
+      for (std::size_t d = 1; d <= association::kMaxChiSquareDof && dof_it->second == 0; ++d) {
+        if (association::chi_square_quantile(d, p) == e.gate) {
+          dof_it->second = d;
+        }
+      }
+    }
+    EXPECT_NE(dof_it->second, 0U) << "no dof gives gate " << e.gate;
+    if (dof_it->second != 0) {
+      s_.nis[engine.sensors().sensors()[*idx].kind].add(e.distance2, dof_it->second);
+    }
+  }
 }
 
 Score Scorer::finish(const Engine& engine) {

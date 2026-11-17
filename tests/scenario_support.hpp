@@ -41,6 +41,7 @@
 #include <string>
 #include <vector>
 
+#include "consistency.hpp"
 #include "sifted/core/engine.hpp"
 #include "sifted/core/sensor.hpp"
 #include "sifted/net/impairment.hpp"
@@ -79,6 +80,25 @@ struct InstantRecord {
   std::map<int, bool> covered;
 };
 
+// Filter consistency (consistency.hpp), over the same matched target-instants
+// as the RMSE (covered, matched, past kRmseBurnInS):
+//   full      4-dof NEES of [px, py, vx, vy] against truth;
+//   position  2-dof NEES of [px, py].
+// Split by what the estimate at the truth instant is:
+//   updated       the track's last update is at that instant (a posterior);
+//   extrapolated  predicted forward from an earlier update (confirmed tracks
+//                 between updates, and coasting tracks).
+// They test different things: the posterior covariance, and the process noise
+// that grows it between updates.
+struct NeesStats {
+  ChiSquareStat full;
+  ChiSquareStat position;
+};
+struct NeesByRegime {
+  NeesStats updated;
+  NeesStats extrapolated;
+};
+
 struct Score {
   std::map<int, double> rmse;  // per target
   std::map<int, std::size_t> rmse_n;
@@ -97,6 +117,17 @@ struct Score {
   double max_rmse = 0.0;
   std::vector<TrackEstimate> trace;     // every reported estimate, for determinism
   std::vector<InstantRecord> instants;  // per truth instant, for recovery analysis
+  NeesByRegime nees;                    // all targets
+  std::map<int, NeesByRegime> nees_by_target;
+  // NIS (the engine's own gating d^2, read from its trace) of every associated
+  // update on a track while it is matched to a covered target past
+  // kRmseBurnInS from that target entering coverage, per sensor kind. Updates
+  // of unmatched (clutter / false) tracks are left out: their measurements
+  // are not of a target the model describes.
+  std::map<SensorKind, ChiSquareStat> nis;
+  // Associated updates that rolled out of a track's trace window before they
+  // could be read (0 unless TraceConfig::events_per_track is too small).
+  std::size_t nis_lost = 0;
 
   double missed_ratio() const {
     return eligible ? static_cast<double>(missed) / static_cast<double>(eligible) : 0.0;
@@ -123,6 +154,11 @@ class Scorer {
   std::map<int, TrackId> last_match_;
   std::map<TrackId, std::pair<std::size_t, std::size_t>> track_counts_;  // reported, matched
   std::map<int, double> sq_;
+  // Reads the Associated trace events of `track` not read before; adds their
+  // NIS if `score` (else only marks them read).
+  void collect_nis(const Engine& engine, TrackId track, bool score);
+  std::map<TrackId, std::uint64_t> nis_read_;  // Associated events read, per track
+  std::map<double, std::size_t> dof_of_gate_;  // gate threshold -> its dof
 };
 
 // Feeds the scenario's measurements straight into an Engine, scan by scan
