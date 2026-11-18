@@ -41,14 +41,15 @@
     },
     {
       "name": "app",
-      "displayName": "App (what install.sh builds: Release, no tests or benchmarks)",
+      "displayName": "App (what install.sh builds: Release, no tests, benchmarks or eval tool)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/app",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "SIFTED_WERROR": "OFF",
         "SIFTED_BUILD_TESTS": "OFF",
-        "SIFTED_BUILD_BENCHMARKS": "OFF"
+        "SIFTED_BUILD_BENCHMARKS": "OFF",
+        "SIFTED_BUILD_EVAL": "OFF"
       }
     },
     {

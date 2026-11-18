@@ -18,7 +18,7 @@
 #include "sifted/net/impairment.hpp"
 #include "sifted/wire/codec.hpp"
 
-namespace sifted::testing::faults {
+namespace sifted::eval::faults {
 
 using Measurements = std::vector<Measurement>;
 
@@ -175,4 +175,4 @@ inline Measurements clutter(Measurements ms, SensorId s, std::size_t per_scan, d
   return out;
 }
 
-}  // namespace sifted::testing::faults
+}  // namespace sifted::eval::faults

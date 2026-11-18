@@ -115,4 +115,4 @@ jobs:
       - name: clang-format
         run: |
           sudo apt-get update && sudo apt-get install -y clang-format-18
-          find src tests fuzz benchmarks -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run -Werror
+          find src tests fuzz benchmarks eval -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run -Werror

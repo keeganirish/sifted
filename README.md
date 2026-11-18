@@ -42,6 +42,10 @@ networking and measured performance.
 - **Built to be trusted.** Every parser of untrusted input is fuzzed; ASan,
   UBSan and ThreadSanitizer run in CI; about 3,000 targets per engine thread
   within a 100 ms p99 budget ([benchmarks](docs/benchmarks.md)).
+- **Measured against ground truth.** One command scores tracking accuracy
+  (RMSE, missed targets, ID switches, false tracks, outage recovery, NEES/NIS)
+  for every scenario under every network impairment and sensor fault
+  ([evaluation scorecard](docs/evaluation.md)).
 
 ## Install
 
@@ -262,7 +266,8 @@ these on demand behind the **operator view** (`web/`), and only ever listens on
 | Quality | libFuzzer, ASan, UBSan, TSan, clang-tidy, GitHub Actions CI |
 
 More: the [design document](docs/design.md), the [threat model](docs/threat-model.md),
-the [architecture decision records](docs/adr/), the [benchmarks](docs/benchmarks.md)
+the [architecture decision records](docs/adr/), the
+[evaluation scorecard](docs/evaluation.md), the [benchmarks](docs/benchmarks.md)
 and the [demo runbook](docs/demo.md).
 
 ## For developers

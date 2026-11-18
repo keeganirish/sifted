@@ -22,11 +22,11 @@ Presets:
 | Preset | What it is |
 |---|---|
 | `dev` | Debug, warnings as errors |
-| `release` | Release, warnings as errors (benchmarks) |
+| `release` | Release, warnings as errors (benchmarks, evaluation scorecard) |
 | `asan` | ASan + UBSan |
 | `tsan` | ThreadSanitizer |
 | `fuzz` | Clang + libFuzzer + ASan/UBSan |
-| `app` | what `install.sh` builds: Release, warnings not fatal, no tests or benchmarks (it turns tests on with `--with-tests`) |
+| `app` | what `install.sh` builds: Release, warnings not fatal, no tests, benchmarks or `sifted_eval` (it turns tests on with `--with-tests`) |
 
 No system packages? Add `-DSIFTED_FETCH_DEPS=ON` to download pinned copies of
 Eigen and GoogleTest at configure time (needs git and internet). Downloaded
@@ -127,6 +127,23 @@ python3 benchmarks/report.py <dir with the CSVs>                     # tables (+
 
 Results and method: [`benchmarks.md`](benchmarks.md).
 
+### Evaluation scorecard
+
+Tracking accuracy and robustness against ground truth (RMSE, missed
+target-instants, ID switches, false tracks, recovery, NEES/NIS) for every
+scenario fixture under every impairment level, outage and fault case; under a
+second in the `release` preset. It regenerates [`evaluation.md`](evaluation.md):
+
+```bash
+cmake --preset release && cmake --build --preset release
+build/release/eval/sifted_eval --out docs/evaluation.md
+build/release/eval/sifted_eval --help                  # --scenarios, --seeds, --levels, --window, --format csv|md
+```
+
+It shares its loading, scoring and condition definitions with the tests
+(`eval/sifted/eval/`, library `sifted_eval_support`); `Eval.*` checks the
+two agree. Regenerate the page after a change that moves a baseline.
+
 ### ADS-B (OpenSky)
 
 ```bash
@@ -195,8 +212,10 @@ tests/        unit tests, fixtures, ground-truth regression, degraded-network,
               fault-injection and UDP flood tests
 fuzz/         six libFuzzer targets and seed corpora
 benchmarks/   engine benchmark harness, end-to-end latency script, report generator
+eval/         shared ground-truth scoring library and the sifted_eval scorecard
 scripts/      demo runner, Windows installer
-docs/         design document, threat model, ADRs 0001-0011, benchmark report, demo runbook
+docs/         design document, threat model, ADRs 0001-0011, benchmark report,
+              evaluation scorecard, demo runbook
 cmake/        build options, sanitizers, dependencies
 ```
 

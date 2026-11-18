@@ -25,7 +25,7 @@
 #include <Eigen/Core>
 #include <cstddef>
 
-namespace sifted::testing {
+namespace sifted::eval {
 
 // e^T P^-1 e (P symmetric positive definite; NaN if it is not).
 double nees(const Eigen::Ref<const Eigen::VectorXd>& e, const Eigen::Ref<const Eigen::MatrixXd>& P);
@@ -70,4 +70,4 @@ struct ChiSquareStat {
   Interval interval(double probability = 0.95) const;
 };
 
-}  // namespace sifted::testing
+}  // namespace sifted::eval

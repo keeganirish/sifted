@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "faults.hpp"
 #include "scenario_support.hpp"
 #include "sifted/estimation/measurement_model.hpp"
+#include "sifted/eval/faults.hpp"
 
 namespace sifted {
 namespace {

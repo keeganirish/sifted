@@ -33,42 +33,7 @@ using net::LinkProfile;
 using testing::PipelineRun;
 using testing::Scenario;
 
-constexpr std::int64_t kMs = 1'000'000;
 constexpr std::int64_t kS = 1'000'000'000;
-
-struct Level {
-  const char* name;
-  LinkProfile profile;
-};
-
-// Named impairment levels. Delays are one-way; the scenarios' sensors report
-// at 1 Hz (radar scans) and 2 Hz (camera), so jitter of a few hundred ms
-// reorders scans and splits them.
-std::vector<Level> levels() {
-  LinkProfile clean;
-  LinkProfile mild;
-  mild.loss = 0.01;
-  mild.delay_ns = 20 * kMs;
-  mild.jitter_ns = 50 * kMs;
-  mild.duplicate = 0.01;
-  LinkProfile moderate;
-  moderate.loss = 0.03;
-  moderate.p_good_to_bad = 0.01;
-  moderate.p_bad_to_good = 0.25;
-  moderate.loss_bad = 0.6;
-  moderate.delay_ns = 50 * kMs;
-  moderate.jitter_ns = 400 * kMs;
-  moderate.duplicate = 0.02;
-  LinkProfile severe;
-  severe.loss = 0.08;
-  severe.p_good_to_bad = 0.03;
-  severe.p_bad_to_good = 0.2;
-  severe.loss_bad = 0.8;
-  severe.delay_ns = 100 * kMs;
-  severe.jitter_ns = 800 * kMs;
-  severe.duplicate = 0.05;
-  return {{"clean", clean}, {"mild", mild}, {"moderate", moderate}, {"severe", severe}};
-}
 
 // formation_split is left out on purpose: its identity outcome is decided by
 // a genuinely ambiguous assignment (see MultiTargetRegression.FormationSplit),
@@ -79,8 +44,13 @@ const std::vector<std::string>& scenario_names() {
   return n;
 }
 
-// The reorder window the daemon uses by default (ADR 0009).
-constexpr double kDefaultWindowS = 0.5;
+// Named impairment levels (clean, mild, moderate, severe), the daemon's
+// reorder window and the outage cases are shared with sifted_eval
+// (eval/sifted/eval/conditions.hpp).
+using testing::impairment_level;
+using testing::impairment_levels;
+using testing::ImpairmentLevel;
+constexpr double kDefaultWindowS = testing::kDaemonReorderWindowS;
 
 PipelineRun run(const Scenario& sc, const LinkProfile& p, std::uint64_t seed, double window_s,
                 std::vector<net::Outage> outages = {}) {
@@ -141,12 +111,7 @@ struct Bound {
 };
 
 void check_level(const char* level, double window, const Bound& b) {
-  LinkProfile p;
-  for (const Level& l : levels()) {
-    if (std::string(l.name) == level) {
-      p = l.profile;
-    }
-  }
+  const LinkProfile& p = impairment_level(level);
   for (const auto& name : scenario_names()) {
     const Scenario sc = testing::load_scenario(name);
     const PipelineRun r = run(sc, p, 7, window);
@@ -198,12 +163,7 @@ TEST(DegradedNetwork, ReorderingRecoversDataThatDroppingLoses) {
   // policy loses a large share of measurements as OutOfOrder; the reorder
   // stage loses almost none, and tracks better.
   for (const char* level : {"moderate", "severe"}) {
-    LinkProfile p;
-    for (const Level& l : levels()) {
-      if (std::string(l.name) == level) {
-        p = l.profile;
-      }
-    }
+    const LinkProfile& p = impairment_level(level);
     for (const auto& name : scenario_names()) {
       const Scenario sc = testing::load_scenario(name);
       const PipelineRun drop = run(sc, p, 7, 0.0);
@@ -229,14 +189,15 @@ TEST(DegradedNetwork, RecoveryAfterOutage) {
   //     measurement after the link returns, and the target re-initiated;
   //   * in between (e.g. the 8 s outage) either can happen; it is reported;
   //   * either way every target is tracked again within a few revisits.
-  for (const std::int64_t length_s : {5, 8, 15}) {
+  for (const std::int64_t length_s : testing::kOutageLengthsS) {
     for (const std::string name : {"crossing_pair", "close_pass", "enter_leave"}) {
       const Scenario sc = testing::load_scenario(name);
       const std::int64_t t0 = sc.truth.front().time_ns;
-      const std::int64_t start = t0 + 30 * kS;
+      const std::int64_t start = t0 + testing::kOutageStartS * kS;
       const std::int64_t end = start + length_s * kS;
       for (const double w : {0.0, kDefaultWindowS}) {
-        const PipelineRun r = run(sc, levels()[1].profile, 11, w, {{start, end}});
+        const PipelineRun r =
+            run(sc, impairment_level(testing::kOutageLevel), 11, w, {{start, end}});
         const testing::Recovery rec = testing::recovery_after(r.score, start, end);
         std::printf(
             "[ recovery ] %-13s outage %2llds window %.2f: targets %zu, recovered after %.1f s, "
@@ -270,7 +231,7 @@ TEST(DegradedNetwork, DemoScenarioAsInTheRunbook) {
   const Scenario sc = testing::load_scenario("demo");
   const std::int64_t start = sc.truth.front().time_ns + 70 * kS;
   const std::int64_t end = start + 8 * kS;
-  const PipelineRun r = run(sc, levels()[2].profile, 7, kDefaultWindowS, {{start, end}});
+  const PipelineRun r = run(sc, impairment_level("moderate"), 7, kDefaultWindowS, {{start, end}});
   print("demo", "moderate", kDefaultWindowS, 7, r);
   const testing::Recovery rec = testing::recovery_after(r.score, start, end);
   std::printf("[ recovery ] demo outage 8s: targets %zu, recovered after %.1f s, survived %zu\n",
@@ -283,13 +244,13 @@ TEST(DegradedNetwork, DemoScenarioAsInTheRunbook) {
 }
 
 TEST(DegradedNetwork, DISABLED_Sweep) {
-  for (const Level& l : levels()) {
+  for (const ImpairmentLevel& l : impairment_levels()) {
     for (const double w : {0.0, 0.25, 0.5, 1.0, 2.0}) {
       for (const std::string name :
            {"crossing_pair", "close_pass", "enter_leave", "formation_split"}) {
         const Scenario sc = testing::load_scenario(name);
         for (const std::uint64_t seed : {7ULL, 8ULL, 9ULL}) {
-          print(name, l.name, w, seed, run(sc, l.profile, seed, w));
+          print(name, l.name.c_str(), w, seed, run(sc, l.profile, seed, w));
         }
       }
     }

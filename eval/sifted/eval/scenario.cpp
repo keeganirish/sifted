@@ -1,12 +1,11 @@
-#include "scenario_support.hpp"
-
-#include <gtest/gtest.h>
+#include "sifted/eval/scenario.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
 
 #include "sifted/association/assignment.hpp"
@@ -14,12 +13,16 @@
 #include "sifted/net/ingest.hpp"
 #include "sifted/wire/codec.hpp"
 
-namespace sifted::testing {
+namespace sifted::eval {
 namespace {
+
+[[noreturn]] void fail(const std::string& what) { throw std::runtime_error(what); }
 
 std::string read_file(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
-  EXPECT_TRUE(f.good()) << "cannot open " << path;
+  if (!f.good()) {
+    fail("cannot open " + path);
+  }
   std::ostringstream ss;
   ss << f.rdbuf();
   return ss.str();
@@ -37,7 +40,9 @@ template <class T>
 T parse(std::string_view s) {
   T v{};
   const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
-  EXPECT_TRUE(ec == std::errc{} && ptr == s.data() + s.size()) << "bad number: " << s;
+  if (ec != std::errc{} || ptr != s.data() + s.size()) {
+    fail("bad number: " + std::string(s));
+  }
   return v;
 }
 
@@ -45,22 +50,31 @@ T parse(std::string_view s) {
 
 std::vector<std::uint8_t> encode_frame(const Measurement& m) { return wire::encode(m); }
 
-Scenario load_scenario(const std::string& name) {
-  const std::string dir = std::string(SIFTED_FIXTURE_DIR) + "/scenarios/" + name + "/";
+bool is_scenario_dir(const std::string& dir) {
+  for (const char* f : {"/sensors.cfg", "/frames.hex", "/truth.csv"}) {
+    if (!std::ifstream(dir + f, std::ios::binary).good()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+Scenario load_scenario_dir(const std::string& path) {
+  const std::string dir = path + "/";
   Scenario sc;
   const auto table = parse_sensor_table(read_file(dir + "sensors.cfg"));
-  EXPECT_TRUE(table.ok());
-  if (table.ok()) {
-    sc.sensors = table.value();
+  if (!table.ok()) {
+    fail(dir + "sensors.cfg: " + std::string(to_string(table.error())));
   }
+  sc.sensors = table.value();
   std::istringstream frames(read_file(dir + "frames.hex"));
   for (std::string line; frames >> line;) {
     const auto bytes = from_hex(line);
     const auto m = wire::decode_measurement(bytes);  // the real C++ decoder
-    EXPECT_TRUE(m.ok()) << line;
-    if (m.ok()) {
-      sc.measurements.push_back(m.value());
+    if (!m.ok()) {
+      fail(dir + "frames.hex: " + std::string(wire::to_string(m.error())) + ": " + line);
     }
+    sc.measurements.push_back(m.value());
   }
   std::istringstream truth(read_file(dir + "truth.csv"));
   std::string line;
@@ -68,7 +82,9 @@ Scenario load_scenario(const std::string& name) {
   // Layout 2 (multi-target); layout 1 (single target, M1) reads as target 1,
   // always covered.
   const bool v1 = line == "time_ns,x_m,y_m,vx_mps,vy_mps";
-  EXPECT_TRUE(v1 || line == "time_ns,x_m,y_m,vx_mps,vy_mps,target_id,covered") << line;
+  if (!v1 && line != "time_ns,x_m,y_m,vx_mps,vy_mps,target_id,covered") {
+    fail(dir + "truth.csv: unknown header: " + line);
+  }
   while (std::getline(truth, line)) {
     if (!line.empty() && line.back() == '\r') {
       line.pop_back();
@@ -87,12 +103,12 @@ Scenario load_scenario(const std::string& name) {
                           true, parse<double>(f[3]), parse<double>(f[4])});
       continue;
     }
-    EXPECT_EQ(f.size(), 7U) << line;
-    if (f.size() == 7) {
-      sc.truth.push_back({parse<std::int64_t>(f[0]), parse<double>(f[1]), parse<double>(f[2]),
-                          parse<int>(f[5]), parse<int>(f[6]) != 0, parse<double>(f[3]),
-                          parse<double>(f[4])});
+    if (f.size() != 7) {
+      fail(dir + "truth.csv: expected 7 fields: " + line);
     }
+    sc.truth.push_back({parse<std::int64_t>(f[0]), parse<double>(f[1]), parse<double>(f[2]),
+                        parse<int>(f[5]), parse<int>(f[6]) != 0, parse<double>(f[3]),
+                        parse<double>(f[4])});
   }
   return sc;
 }
@@ -204,7 +220,9 @@ void Scorer::score(std::size_t i, const Engine& engine) {
           e.state - estimation::StateVector(now[a].x, now[a].y, now[a].vx, now[a].vy);
       const double full = nees(err, e.covariance);
       const double pos = nees(err.head<2>(), e.covariance.topLeftCorner<2, 2>());
-      EXPECT_TRUE(std::isfinite(full) && std::isfinite(pos)) << "track " << e.id << " at " << t;
+      if (!std::isfinite(full) || !std::isfinite(pos)) {
+        fail("non-finite NEES: track " + std::to_string(e.id) + " at " + std::to_string(t));
+      }
       const bool updated = e.last_update.ns == t;
       for (NeesByRegime* agg : {&s_.nees, &s_.nees_by_target[tgt]}) {
         NeesStats& st = updated ? agg->updated : agg->extrapolated;
@@ -252,9 +270,8 @@ void Scorer::collect_nis(const Engine& engine, TrackId track, bool score) {
   for (auto it = events.rbegin(); it != events.rend(); ++it) {
     const store::TraceEvent& e = **it;
     const auto idx = engine.sensors().index_of(e.sensor);
-    EXPECT_TRUE(idx.has_value()) << "sensor " << e.sensor;
     if (!idx) {
-      continue;
+      fail("trace names unknown sensor " + std::to_string(e.sensor));
     }
     // Degrees of freedom from the data: the gate the engine compared d^2 to is
     // the chi-square quantile of the measurement's dimension, so find the dof
@@ -268,10 +285,10 @@ void Scorer::collect_nis(const Engine& engine, TrackId track, bool score) {
         }
       }
     }
-    EXPECT_NE(dof_it->second, 0U) << "no dof gives gate " << e.gate;
-    if (dof_it->second != 0) {
-      s_.nis[engine.sensors().sensors()[*idx].kind].add(e.distance2, dof_it->second);
+    if (dof_it->second == 0) {
+      fail("no dof gives gate " + std::to_string(e.gate));
     }
+    s_.nis[engine.sensors().sensors()[*idx].kind].add(e.distance2, dof_it->second);
   }
 }
 
@@ -472,4 +489,4 @@ double velocity_change(const Scenario& sc, int target, std::int64_t from_ns, std
   return worst;
 }
 
-}  // namespace sifted::testing
+}  // namespace sifted::eval

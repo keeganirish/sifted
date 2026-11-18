@@ -12,8 +12,8 @@
 #include <string>
 #include <vector>
 
-#include "faults.hpp"
 #include "scenario_support.hpp"
+#include "sifted/eval/faults.hpp"
 #include "sifted/net/ingest.hpp"
 
 namespace sifted {
@@ -88,12 +88,13 @@ TEST(Faults, RadarDropoutCoastsAndRecovers) {
   // The only track-holding sensor goes silent for 6 s; camera bearings keep
   // refining the tracks but cannot hold them (lifecycle: bearing-only updates
   // neither confirm nor keep a track out of coasting).
+  const testing::FaultCase& fault = testing::fault_case("range-bearing dropout 6 s");
   for (const auto& name : scenario_names()) {
     const Scenario sc = testing::load_scenario(name);
-    const SensorId radar = first_of_kind(sc.sensors, SensorKind::RangeBearing);
-    const std::int64_t a = start_of(sc) + 30 * kS;
-    const std::int64_t b = a + 6 * kS;
-    const Score s = testing::run_engine(sc, faults::dropout(sc.measurements, radar, a, b));
+    const SensorId radar = first_of_kind(sc.sensors, fault.kind);
+    const std::int64_t a = start_of(sc) + fault.start_s * kS;
+    const std::int64_t b = a + fault.length_s * kS;
+    const Score s = testing::run_engine(sc, fault.apply(sc.measurements, radar, a, b));
     const testing::Recovery rec = testing::recovery_after(s, a, b);
     print("radar dropout 6 s", name, s);
     std::printf("[ fault ]   recovered after %.1f s, survived %zu/%zu\n", rec.recovery_s,
@@ -107,12 +108,12 @@ TEST(Faults, RadarDropoutCoastsAndRecovers) {
 TEST(Faults, IntermittentCameraDegradesGracefully) {
   // The camera is off for random 2 s periods (40% of them). Fusion gains
   // shrink, nothing breaks.
+  const testing::FaultCase& fault = testing::fault_case("bearing-only intermittent");
   for (const auto& name : scenario_names()) {
     const Scenario sc = testing::load_scenario(name);
-    const SensorId camera = first_of_kind(sc.sensors, SensorKind::BearingOnly);
+    const SensorId camera = first_of_kind(sc.sensors, fault.kind);
     const Score base = testing::run_engine(sc);
-    const Score s =
-        testing::run_engine(sc, faults::intermittent(sc.measurements, camera, 2 * kS, 0.4, 17));
+    const Score s = testing::run_engine(sc, fault.apply(sc.measurements, camera, 0, 0));
     print("intermittent camera", name, s);
     EXPECT_EQ(s.id_switches, base.id_switches) << name;
     EXPECT_EQ(s.false_tracks, base.false_tracks) << name;

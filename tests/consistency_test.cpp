@@ -43,7 +43,7 @@
 //    Whether a scenario is straight is read from its truth (no target's
 //    velocity ever changes), never from its name.
 
-#include "consistency.hpp"
+#include "sifted/eval/consistency.hpp"
 
 #include <gtest/gtest.h>
 

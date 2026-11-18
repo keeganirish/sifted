@@ -19,7 +19,9 @@ Small, curated, committed inputs. Large recordings belong in `recordings/` (git-
       sensor that can start tracks. Used by
       `tests/multi_target_regression_test.cpp` (`crossing_pair`, `close_pass`,
       `enter_leave`, `formation_split`), and since M3 by the degraded-network,
-      fault-injection and gate-screen tests through `tests/scenario_support.hpp`.
+      fault-injection and gate-screen tests through `tests/scenario_support.hpp`
+      (the shared `eval/sifted/eval/` library), and by `sifted_eval`, which reads
+      every scenario directory here (`docs/evaluation.md`).
       Rows are truth samples, not frames.
 
     Layout 2 only appends columns, so M1 readers and fixtures are unaffected.

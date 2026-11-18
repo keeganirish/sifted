@@ -1,4 +1,4 @@
-#include "consistency.hpp"
+#include "sifted/eval/consistency.hpp"
 
 #include <Eigen/Cholesky>
 #include <cmath>
@@ -6,7 +6,7 @@
 
 #include "sifted/association/gating.hpp"
 
-namespace sifted::testing {
+namespace sifted::eval {
 
 double nees(const Eigen::Ref<const Eigen::VectorXd>& e,
             const Eigen::Ref<const Eigen::MatrixXd>& P) {
@@ -56,4 +56,4 @@ Interval ChiSquareStat::interval(double probability) const {
   return {sum_interval.lo / count, sum_interval.hi / count};
 }
 
-}  // namespace sifted::testing
+}  // namespace sifted::eval
