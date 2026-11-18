@@ -6,6 +6,10 @@
 
 namespace sifted::net {
 
+// Keeps a snapshot of the default 1024 tracks under the WebSocket server's
+// 8 MiB message limit even with every excerpt full (about 7.4 MiB at worst).
+inline constexpr std::size_t kMaxSnapshotTraceEvents = 32;
+
 // Everything besides the sensor table that determines the output of the
 // ingest -> engine path. Recorded in full in every event log header so a
 // replay is configured exactly like the run it reproduces.
@@ -14,6 +18,11 @@ struct PipelineConfig {
   // Track snapshots are published whenever the engine clock (measurement
   // time, never the wall clock) has advanced this far since the last one.
   double snapshot_interval_s = 0.5;
+  // Newest decision-trace events published per track in each snapshot (0:
+  // none). Display only: it changes the snapshot text, never the tracking.
+  // Clients join successive excerpts, so it only has to cover the decisions
+  // made between two snapshots (docs/design.md section 8).
+  std::size_t snapshot_trace_events = 4;
   // Per-sensor duplicate-suppression window: the last N (seq, time) keys
   // accepted from each configured sensor.
   std::size_t dedup_window = 256;

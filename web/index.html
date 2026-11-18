@@ -150,13 +150,22 @@
         <label class="switch"><input type="checkbox" id="showTentative"><span></span>Show Tentative Tracks</label>
         <label class="switch"><input type="checkbox" id="follow" checked><span></span>Zoom to Tracks When They First Appear</label>
       </div>
+      <section class="why" id="why" aria-labelledby="whyTitle" hidden>
+        <div class="why-head">
+          <h2 class="section-title" id="whyTitle">Why This Track</h2>
+          <button class="why-close" id="whyClose" title="Close" aria-label="Close decision history">×</button>
+        </div>
+        <p class="why-note" id="whyNote" hidden></p>
+        <ol class="why-list" id="whyList"></ol>
+        <p class="why-foot" id="whyFoot"></p>
+      </section>
       <table class="tracks">
         <thead><tr><th>Track</th><th>State</th><th title="1-sigma position uncertainty">σ (m)</th><th title="Ground speed">Speed</th><th>Sensors</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <div class="empty" id="tracksEmpty">
         <p>No Tracks Yet</p>
-        <p class="muted">Tracks appear here once the fusion service confirms them. Click a row to find it on the map.</p>
+        <p class="muted">Tracks appear here once the fusion service confirms them. Click a row to find it on the map and see why the system believes it.</p>
       </div>
       <p class="muted small">Circles show each track's 1-σ position uncertainty; lines show where it
         will be in 30 s at its current velocity. Dashed means coasting: no recent measurements, so

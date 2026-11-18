@@ -9,9 +9,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -91,7 +94,7 @@ TEST(Pipeline, AssemblesScansByConsecutiveSensorAndTime) {
   ASSERT_GE(ls.size(), 4U);
   EXPECT_EQ(ls[0], "m 3 1 0 0 initialized 1");
   EXPECT_EQ(ls[1], "m 3 1 1 0 initialized 2");
-  EXPECT_EQ(ls[2].rfind("s {\"type\":\"sifted.tracks\",\"version\":1,\"seq\":1,\"time_ns\":0", 0),
+  EXPECT_EQ(ls[2].rfind("s {\"type\":\"sifted.tracks\",\"version\":2,\"seq\":1,\"time_ns\":0", 0),
             0U);
   EXPECT_EQ(ls[3], "m 4 2 0 0 initialized 3");
 }
@@ -141,15 +144,118 @@ TEST(Snapshot, FormatIsVersionedAndComplete) {
   e.sensors = {1, 20};
   const std::string j =
       format_snapshot(3, Timestamp{100}, {e}, estimation::GeoOrigin{0.0, 0.0, 0.0});
-  EXPECT_EQ(j.rfind("{\"type\":\"sifted.tracks\",\"version\":1,\"seq\":3,\"time_ns\":100,", 0), 0U);
+  EXPECT_EQ(j.rfind("{\"type\":\"sifted.tracks\",\"version\":2,\"seq\":3,\"time_ns\":100,", 0), 0U);
   for (const char* key : {"\"id\":7", "\"status\":\"coasting\"", "\"x\":1000", "\"y\":-500.5",
                           "\"cov\":[4,0,1]", "\"sigma_m\":2", "\"lat\":", "\"lon\":",
                           "\"updates\":12", "\"sensors\":[1,20]", "\"manoeuvring\":false"}) {
     EXPECT_NE(j.find(key), std::string::npos) << key << " in " << j;
   }
   EXPECT_EQ(format_snapshot(1, Timestamp{0}, {}, std::nullopt),
-            "{\"type\":\"sifted.tracks\",\"version\":1,\"seq\":1,\"time_ns\":0,\"origin\":null,"
+            "{\"type\":\"sifted.tracks\",\"version\":2,\"seq\":1,\"time_ns\":0,\"origin\":null,"
             "\"tracks\":[]}");
+}
+
+TEST(Snapshot, EncodesTraceEvents) {
+  TrackEstimate e;
+  e.id = 3;
+  e.state = estimation::StateVector::Zero();
+  e.covariance = estimation::StateCovariance::Identity();
+  e.trace_total = 12;
+
+  store::TraceEvent associated;
+  associated.kind = store::TraceEventKind::Associated;
+  associated.time = Timestamp{42};
+  associated.sensor = 5;
+  associated.seq = 9;
+  associated.distance2 = 2.5;
+  associated.gate = 13.75;
+  store::TraceEvent competed = associated;
+  competed.kind = store::TraceEventKind::Competed;
+  competed.other = 7;
+  store::TraceEvent coasting;  // no gating statistic: NaN in the store
+  coasting.kind = store::TraceEventKind::Coasting;
+  coasting.time = Timestamp{50};
+  store::TraceEvent dropped;
+  dropped.kind = store::TraceEventKind::Dropped;
+  dropped.time = Timestamp{60};
+  dropped.drop_reason = association::DropReason::TentativeTimeout;
+  e.trace = {associated, competed, coasting, dropped};
+
+  const std::string j = format_snapshot(1, Timestamp{60}, {e}, std::nullopt);
+  const std::string expected =
+      "\"trace_total\":12,\"trace\":["
+      "{\"kind\":\"associated\",\"time_ns\":42,\"sensor\":5,\"seq\":9,\"d2\":2.5,\"gate\":13.75,"
+      "\"other\":0,\"drop_reason\":\"none\"},"
+      "{\"kind\":\"competed\",\"time_ns\":42,\"sensor\":5,\"seq\":9,\"d2\":2.5,\"gate\":13.75,"
+      "\"other\":7,\"drop_reason\":\"none\"},"
+      "{\"kind\":\"coasting\",\"time_ns\":50,\"sensor\":0,\"seq\":0,\"d2\":null,\"gate\":null,"
+      "\"other\":0,\"drop_reason\":\"none\"},"
+      "{\"kind\":\"dropped\",\"time_ns\":60,\"sensor\":0,\"seq\":0,\"d2\":null,\"gate\":null,"
+      "\"other\":0,\"drop_reason\":\"tentative timeout\"}]}]}";
+  ASSERT_GE(j.size(), expected.size());
+  EXPECT_EQ(j.substr(j.size() - expected.size()), expected);
+}
+
+TEST(Snapshot, TraceStringsAreStableAndNeedNoEscaping) {
+  const auto plain = [](std::string_view s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(),
+                                     [](char c) { return (c >= 'a' && c <= 'z') || c == ' '; });
+  };
+  const std::array<std::string_view, store::kTraceEventKindCount> kinds = {
+      "initiated", "associated", "competed", "near miss",       "update rejected", "confirmed",
+      "coasting",  "recovered",  "dropped",  "manoeuvre start", "manoeuvre end"};
+  for (std::size_t k = 0; k < kinds.size(); ++k) {
+    EXPECT_EQ(store::to_string(static_cast<store::TraceEventKind>(k)), kinds[k]);
+    EXPECT_TRUE(plain(kinds[k])) << kinds[k];
+  }
+  for (const auto r : {association::DropReason::None, association::DropReason::TentativeTimeout,
+                       association::DropReason::Stale, association::DropReason::Uncertainty}) {
+    EXPECT_TRUE(plain(association::to_string(r))) << association::to_string(r);
+  }
+}
+
+TEST(Pipeline, TraceExcerptLengthIsAParameterAndNeverChangesTracking) {
+  const auto run = [](std::size_t excerpt) {
+    PipelineConfig cfg;
+    cfg.snapshot_interval_s = 0.0;
+    cfg.snapshot_trace_events = excerpt;
+    std::string out;
+    Pipeline p(table(), cfg, [&](std::string_view l) { out.append(l); });
+    for (std::uint32_t k = 0; k < 12; ++k) {
+      const std::int64_t t = k * 1'000'000'000LL;
+      p.on_frame(Timestamp{t}, wire::encode(meas(1, 2 * k, t, 4000.0 + k, 0.3)));
+      p.on_frame(Timestamp{t}, wire::encode(meas(1, 2 * k + 1, t, 4040.0 + k, 0.3)));
+    }
+    p.finish(Timestamp{12'000'000'000LL});
+    return out;
+  };
+  // The output with the excerpt removed, which must not depend on its length.
+  const auto without_trace = [](std::string s) {
+    for (std::size_t b = s.find(",\"trace\":["); b != std::string::npos;
+         b = s.find(",\"trace\":[", b)) {
+      s.erase(b, s.find(']', b) + 1 - b);
+    }
+    return s;
+  };
+  const auto events_in_last_snapshot = [](const std::string& s) {
+    std::size_t n = 0;
+    const std::size_t last = s.rfind("\ns {");
+    for (std::size_t b = s.find("\"kind\":", last); b != std::string::npos;
+         b = s.find("\"kind\":", b + 1)) {
+      ++n;
+    }
+    return n;
+  };
+
+  const std::string none = run(0);
+  const std::string two = run(2);
+  const std::string all = run(kMaxSnapshotTraceEvents);
+  EXPECT_EQ(events_in_last_snapshot(none), 0U);
+  EXPECT_EQ(events_in_last_snapshot(two), 4U);  // two tracks
+  EXPECT_GT(events_in_last_snapshot(all), 4U);
+  EXPECT_EQ(without_trace(two), without_trace(none));
+  EXPECT_EQ(without_trace(all), without_trace(none));
+  EXPECT_EQ(run(2), two);
 }
 
 TEST(BoundedQueue, DropsWhenFullAndKeepsOrder) {

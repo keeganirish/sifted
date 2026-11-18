@@ -547,6 +547,7 @@ TrackEstimate Engine::estimate_of(const TrackRecord& r) const {
   e.updates = r.updates;
   e.last_sensor = r.last_sensor;
   e.manoeuvring = r.manoeuvring;
+  e.trace_total = r.recent.pushed();
   e.sensors.reserve(r.sensors.size());
   for (const store::SensorContribution& c : r.sensors) {
     e.sensors.push_back(c.sensor);
@@ -571,7 +572,8 @@ std::optional<TrackEstimate> Engine::track(TrackId id) const {
   return estimate_of(*r);
 }
 
-std::optional<TrackEstimate> Engine::track_at(TrackId id, Timestamp t) const {
+std::optional<TrackEstimate> Engine::track_at(TrackId id, Timestamp t,
+                                              std::size_t trace_events) const {
   const TrackRecord* r = store_.find(id);
   if (r == nullptr || t < r->time) {
     return std::nullopt;
@@ -584,14 +586,20 @@ std::optional<TrackEstimate> Engine::track_at(TrackId id, Timestamp t) const {
   e.time = t;
   e.state = f.state();
   e.covariance = f.covariance();
+  const std::size_t kept = r->recent.size();
+  const std::size_t n = std::min(trace_events, kept);
+  e.trace.reserve(n);
+  for (std::size_t i = kept - n; i < kept; ++i) {
+    e.trace.push_back(r->recent.at(i));
+  }
   return e;
 }
 
-std::vector<TrackEstimate> Engine::tracks_at(Timestamp t) const {
+std::vector<TrackEstimate> Engine::tracks_at(Timestamp t, std::size_t trace_events) const {
   std::vector<TrackEstimate> out;
   out.reserve(store_.size());
   for (const TrackRecord& r : store_.live()) {
-    if (auto e = track_at(r.id, t)) {
+    if (auto e = track_at(r.id, t, trace_events)) {
       out.push_back(std::move(*e));
     }
   }

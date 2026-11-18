@@ -73,7 +73,7 @@ python3 -m sifted_sim.send demo --target 127.0.0.1:5601 --speed 1
 | Scenario time | On screen | Say |
 |---|---|---|
 | 0-5 s | tracks appear a few seconds after start | a track is shown once it is confirmed (3 radar hits); before that it is tentative and hidden |
-| 5-60 s | two tracks converging in the middle | the crossing pair: 30° apart, inside each other's gates for ~10 s. Global nearest neighbour keeps the ids straight |
+| 5-60 s | two tracks converging in the middle | the crossing pair: 30° apart, inside each other's gates for ~10 s. Global nearest neighbour keeps the ids straight. Click one: **Why Track N** in the Tracks tab lists each association with its d² and gate, and which track won a contested measurement |
 | ~20 s | a new track in the east | target 3 entering radar coverage from outside |
 | any time | contributing sensors in the track table and tooltip | radar *and* camera: bearings from the camera's different viewpoint tighten the estimate (~25% lower error in the tests) |
 | 50-80 s | the western track turns | manoeuvre detection raises process noise during the turn (the tooltip says "manoeuvring") |

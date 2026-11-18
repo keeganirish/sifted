@@ -72,6 +72,7 @@ constexpr const char* kUsage =
     "  --accel-psd Q  --initial-velocity-sigma V  --gate-probability P\n"
     "  --confirm-hits N  --tentative-timeout S  --coast-after S  --drop-after S\n"
     "  --max-position-sigma M  --max-tracks N  --snapshot-interval S\n"
+    "  --snapshot-trace-events N (newest decisions per track per snapshot, 0-32; 0: none) [4]\n"
     "  --assignment gnn|greedy (greedy only for comparisons)\n"
     "\n"
     "common options:\n"
@@ -235,6 +236,8 @@ std::string parse_args(int argc, char** argv, Options& o) {
       ok = tuning(o.config.engine.max_tracks);
     } else if (a == "--snapshot-interval") {
       ok = tuning(o.config.snapshot_interval_s);
+    } else if (a == "--snapshot-trace-events") {
+      ok = tuning(o.config.snapshot_trace_events);
     } else {
       return "unknown option: " + std::string(a);
     }

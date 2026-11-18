@@ -25,10 +25,11 @@ double seconds_between(Timestamp from, Timestamp to) noexcept {
 
 bool is_valid(const PipelineConfig& c) noexcept {
   return sifted::is_valid(c.engine) && c.snapshot_interval_s >= 0.0 &&
-         std::isfinite(c.snapshot_interval_s) && c.max_scan_size >= 1 && c.max_scan_size <= 4096 &&
-         c.dedup_window <= 65536 && c.reorder_window_s >= 0.0 && c.reorder_window_s <= 60.0 &&
-         c.reorder_capacity >= 1 && c.reorder_capacity <= 65536 && c.max_time_ahead_s >= 0.0 &&
-         c.max_time_ahead_s <= 86400.0;
+         std::isfinite(c.snapshot_interval_s) &&
+         c.snapshot_trace_events <= kMaxSnapshotTraceEvents && c.max_scan_size >= 1 &&
+         c.max_scan_size <= 4096 && c.dedup_window <= 65536 && c.reorder_window_s >= 0.0 &&
+         c.reorder_window_s <= 60.0 && c.reorder_capacity >= 1 && c.reorder_capacity <= 65536 &&
+         c.max_time_ahead_s >= 0.0 && c.max_time_ahead_s <= 86400.0;
 }
 
 Pipeline::Pipeline(SensorTable sensors, PipelineConfig config, LineSink output,
@@ -176,8 +177,9 @@ void Pipeline::flush(Timestamp recv) {
   if (now &&
       (!last_snapshot_ || seconds_between(*last_snapshot_, *now) >= config_.snapshot_interval_s)) {
     last_snapshot_ = now;
-    const std::string json =
-        format_snapshot(++snapshot_seq_, *now, engine_.tracks_at(*now), config_.engine.origin);
+    const std::string json = format_snapshot(++snapshot_seq_, *now,
+                                             engine_.tracks_at(*now, config_.snapshot_trace_events),
+                                             config_.engine.origin);
     emit("s " + json);
     if (publish_) {
       publish_(json);

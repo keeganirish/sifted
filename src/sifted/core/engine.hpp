@@ -141,6 +141,13 @@ struct TrackEstimate {
   SensorId last_sensor = 0;
   std::vector<SensorId> sensors;  // contributing sensors, ascending
   bool manoeuvring = false;       // raised process noise in effect
+  // Decisions ever recorded for this track. The newest entry of `trace` is
+  // decision number trace_total - 1, so excerpts from different times can be
+  // joined without guessing which events they share.
+  std::uint64_t trace_total = 0;
+  // The newest decisions, oldest first, in the store's order. Empty unless
+  // requested (track_at / tracks_at `trace_events`).
+  std::vector<store::TraceEvent> trace;
 };
 
 class Engine {
@@ -166,9 +173,11 @@ class Engine {
   std::vector<TrackEstimate> tracks() const;
   std::optional<TrackEstimate> track(TrackId id) const;
   // Estimates extrapolated to `t` (>= each track's time) without changing
-  // state. Tracks that cannot be predicted to `t` are omitted.
-  std::vector<TrackEstimate> tracks_at(Timestamp t) const;
-  std::optional<TrackEstimate> track_at(TrackId id, Timestamp t) const;
+  // state. Tracks that cannot be predicted to `t` are omitted. Each estimate
+  // carries up to `trace_events` of the track's newest decisions.
+  std::vector<TrackEstimate> tracks_at(Timestamp t, std::size_t trace_events = 0) const;
+  std::optional<TrackEstimate> track_at(TrackId id, Timestamp t,
+                                        std::size_t trace_events = 0) const;
 
   // The engine clock: time of the latest accepted measurement group.
   std::optional<Timestamp> time() const noexcept { return now_; }

@@ -215,6 +215,7 @@ header) unless marked.
 | `max_tracks` | 1024 | resource bound |
 | trace sizes | 64 events/track, 64 dropped tracks, 1024 measurements, 32 sensors/track | bounded memory |
 | `snapshot_interval_s` | 0.5 s (measurement time) | display rate |
+| `snapshot_trace_events` | 4 per track (at most 32) | display only; see below |
 | `dedup_window` | 256 per sensor | covers a scan and its retransmissions |
 | `max_scan_size` | 256 | bounds one assignment problem |
 | `reorder_window_s` | 0 (library), **0.5 s (daemon)** | ADR 0009, section 9 |
@@ -222,6 +223,31 @@ header) unless marked.
 | `max_time_ahead_s` | 0 (off) | ADR 0010; needs a common timebase; set ≤ the reorder window |
 | `gate_screen` (not recorded) | on | never changes results (section 10) |
 | rate limit (daemon only, not recorded) | 20 000/s, burst 4 096, 1 024 sources | ADR 0010; drops never reach the engine or the log |
+
+**Decision trace in snapshots.** The trace records why the system believes a
+track: its birth, each association with d² and the gate, contested
+measurements, near misses, rejected updates, and lifecycle and manoeuvre
+changes. It is bounded so memory and message size stay fixed however long a
+track lives. Snapshot v2 (`net/snapshot.hpp`) carries each track's newest
+`snapshot_trace_events` decisions and `trace_total`, the number of decisions
+ever made, so the operator view can join successive excerpts without
+duplicates and keep up to 64 per track, discarding routine associations first.
+The stream stays one-way (ADR 0006) and a replay publishes the same excerpts,
+so the page's history starts when it connects. Dropped tracks leave the
+snapshot, so a `dropped` event is encoded by the format but is not normally
+published.
+
+Four events is the shortest excerpt that covers nearly every gap between two
+snapshots: in six recorded demo runs and two synthetic runs (100 and 1 000
+targets), 99.97% of 0.5 s intervals added at most four decisions to a track.
+Sending only new events was rejected because the publisher deliberately lets
+slow clients skip snapshots, so a skipped delta would be lost. Cost, measured
+with `benchmarks/e2e_latency.py` workloads against the build without the trace:
+
+| targets | snapshot before | snapshot with 4 events | median e2e latency before | with 4 events |
+|---:|---:|---:|---:|---:|
+| 100 | 35 KB | 100 KB | 101.6 ms | 101.8 ms |
+| 1 000 | 352 KB | 1.00 MB | 113.1 ms | 118.1 ms |
 
 ## 9. Degraded-network behaviour
 

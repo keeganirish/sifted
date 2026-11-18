@@ -5,7 +5,7 @@ Ingest and publication (ADR 0006). Network threads only receive, validate, times
 Deterministic part (in `sifted_core`, shared by live runs and replay):
 - `ingest.hpp`: `Pipeline`: strict decode, duplicate suppression, clock gate (ADR 0010), bounded reorder stage (ADR 0009), scan assembly, `Engine::on_scan`, output lines and snapshots.
 - `dedup.hpp`: per-sensor `(seq, time)` window, restart-tolerant.
-- `snapshot.hpp`: versioned track snapshot JSON (`sifted.tracks` v1).
+- `snapshot.hpp`: versioned track snapshot JSON (`sifted.tracks` v2), including each track's newest decision-trace events.
 - `pipeline_config.hpp`: everything besides the sensor table that determines output (all of it recorded in the event log header).
 - `impairment.hpp`: the seeded degraded-network model (loss with Gilbert-Elliott bursts, delay and jitter, duplication, outages; ADR 0008). Used by tests offline; mirrored exactly by `sim/sifted_sim/impair.py`, which also runs it live as a UDP proxy.
 

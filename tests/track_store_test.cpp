@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -97,6 +99,42 @@ TEST(Trace, NearMissesAndCompetitionAreRecorded) {
   ASSERT_NE(t1, nullptr);
   EXPECT_EQ(t1->totals[static_cast<std::size_t>(store::TraceEventKind::NearMiss)], 1U);
   EXPECT_TRUE(contains(*e.explain(1), "near miss sensor 1 seq 10 d2="));
+}
+
+TEST(Trace, ExcerptMatchesExplain) {
+  EngineConfig cfg;
+  cfg.trace.events_per_track = 6;
+  Engine e(table(), cfg);
+  std::uint32_t seq = 0;
+  for (int k = 0; k < 9; ++k) {
+    e.on_measurement(radar_at(4000.0 + 50.0 * k, 0.0, k * kSecond, seq++));
+  }
+  e.on_measurement(radar_at(4450.0, 130.0, 9 * kSecond, seq++));  // a near miss for track 1
+  const Timestamp now{9 * kSecond};
+  const store::TrackRecord* r = e.store().find(1);
+  ASSERT_NE(r, nullptr);
+
+  EXPECT_TRUE(e.track_at(1, now)->trace.empty());  // only filled when asked for
+  EXPECT_EQ(e.track_at(1, now)->trace_total, r->recent.pushed());
+
+  for (const std::size_t n : {std::size_t{1}, std::size_t{4}, std::size_t{6}, std::size_t{100}}) {
+    const auto estimate = e.track_at(1, now, n);
+    ASSERT_TRUE(estimate.has_value());
+    EXPECT_EQ(estimate->trace_total, r->recent.pushed());
+    ASSERT_EQ(estimate->trace.size(), std::min<std::size_t>(n, 6));
+    // Oldest first, and exactly the last lines of explain()'s recent decisions.
+    std::string lines;
+    for (const store::TraceEvent& ev : estimate->trace) {
+      lines += "    " + store::format(ev) + "\n";
+    }
+    EXPECT_TRUE(contains(*e.explain(1), lines + "  totals:")) << lines << *e.explain(1);
+  }
+
+  const auto all = e.tracks_at(now, 2);
+  ASSERT_EQ(all.size(), 2U);
+  EXPECT_EQ(all[0].trace.back().kind, store::TraceEventKind::NearMiss);
+  EXPECT_EQ(all[1].trace.back().kind, store::TraceEventKind::Initiated);
+  EXPECT_TRUE(e.tracks_at(now)[0].trace.empty());
 }
 
 TEST(Trace, IsBoundedAndSurvivesTheDrop) {

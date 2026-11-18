@@ -138,6 +138,9 @@ const std::vector<Param>& params() {
       added_later(uns<std::size_t>("reorder_capacity",
                                    [](C& c) -> std::size_t& { return c.reorder_capacity; })),
       added_later(dbl("max_time_ahead_s", [](C& c) -> double& { return c.max_time_ahead_s; })),
+      // Display only: an older log replays the same tracks, with the default excerpt.
+      added_later(uns<std::size_t>("snapshot_trace_events",
+                                   [](C& c) -> std::size_t& { return c.snapshot_trace_events; })),
   };
   return p;
 }

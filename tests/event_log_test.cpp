@@ -68,6 +68,27 @@ TEST(EventLog, HeaderRoundTripsExactly) {
   EXPECT_NE(text.find("sensors\nsifted-sensors 1\n"), std::string::npos);
 }
 
+TEST(EventLog, RecordsTheSnapshotTraceLengthAndReadsOlderHeadersWithoutIt) {
+  RunHeader h = sample_header();
+  h.config.snapshot_trace_events = 3;
+  const std::string text = format_header(h);
+  const std::string line = "param snapshot_trace_events 3\n";
+  ASSERT_NE(text.find(line), std::string::npos);
+  const auto back = parse_header(text);
+  ASSERT_TRUE(back.ok());
+  EXPECT_EQ(back.value().config.snapshot_trace_events, 3U);
+
+  std::string older = text;
+  older.erase(older.find(line), line.size());
+  const auto old = parse_header(older);
+  ASSERT_TRUE(old.ok());
+  EXPECT_EQ(old.value().config.snapshot_trace_events, net::PipelineConfig{}.snapshot_trace_events);
+
+  std::string excessive = text;
+  excessive.replace(excessive.find(line), line.size(), "param snapshot_trace_events 33\n");
+  EXPECT_FALSE(parse_header(excessive).ok());
+}
+
 TEST(EventLog, HeaderIsStrict) {
   const std::string good = format_header(sample_header());
   auto bad = [](std::string s) { return !parse_header(s).ok(); };

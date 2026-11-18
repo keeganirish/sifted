@@ -18,6 +18,21 @@ void num(std::string& out, double v) {
   out.append(buf.data(), ptr);
 }
 
+// The kind and drop reason come from closed sets of plain words, so they need
+// no JSON escaping. A NaN statistic (none defined for this event) becomes null.
+void trace_event(std::string& out, const store::TraceEvent& e) {
+  out += "{\"kind\":\"";
+  out += store::to_string(e.kind);
+  out += "\",\"time_ns\":" + std::to_string(e.time.ns) + ",\"sensor\":" + std::to_string(e.sensor) +
+         ",\"seq\":" + std::to_string(e.seq) + ",\"d2\":";
+  num(out, e.distance2);
+  out += ",\"gate\":";
+  num(out, e.gate);
+  out += ",\"other\":" + std::to_string(e.other) + ",\"drop_reason\":\"";
+  out += association::to_string(e.drop_reason);
+  out += "\"}";
+}
+
 }  // namespace
 
 std::string format_snapshot(std::uint64_t seq, Timestamp time,
@@ -78,7 +93,14 @@ std::string format_snapshot(std::uint64_t seq, Timestamp time,
     }
     out += "],\"manoeuvring\":";
     out += t.manoeuvring ? "true" : "false";
-    out += "}";
+    out += ",\"trace_total\":" + std::to_string(t.trace_total) + ",\"trace\":[";
+    for (std::size_t i = 0; i < t.trace.size(); ++i) {
+      if (i > 0) {
+        out += ",";
+      }
+      trace_event(out, t.trace[i]);
+    }
+    out += "]}";
   }
   out += "]}";
   return out;

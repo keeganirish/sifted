@@ -9,12 +9,16 @@
 //    a read-only view of a daemon's track stream, as before.
 //      index.html?ws=ws://host:port/   (default ws://<this host>:8765/)
 //
-// The track stream is JSON "sifted.tracks" v1 (src/sifted/net/snapshot.hpp).
+// The track stream is JSON "sifted.tracks" v2 (src/sifted/net/snapshot.hpp).
 // Nothing is ever sent to the daemon.
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
+const SNAPSHOT_VERSION = 2;
 const LEADER_S = 30;
+const TRACE_KEEP = 64;     // decisions remembered per track in this page
+const GATE_CLOSE = 0.75;   // d² / gate from which a measurement is flagged as close to the gate
+const TRACE_ROUTINE = new Set(["associated", "competed", "near miss"]);  // per-measurement decisions
 const COLORS = { confirmed: "#3ea6ff", coasting: "#f0b429", tentative: "#8b98a8" };
 const store = {  // localStorage can be missing or throw (private mode, some embeds)
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -103,6 +107,7 @@ setMapTheme(store.get("sifted.mapTheme") !== "light");
 $("themeBtn").onclick = () => setMapTheme(!document.body.classList.contains("dark-map"));
 
 const layers = new Map();  // track id -> {dot, ring, leader, label}
+const traces = new Map();  // track id -> {total, events: oldest first, each with its decision number n}
 let fitted = false;
 // Keep zooming out to new tracks until the user moves the map themselves.
 let autoFit = true;
@@ -119,6 +124,9 @@ function offset(lat, lon, east, north) {
 function clearTracks() {
   for (const l of layers.values()) for (const k of ["dot", "ring", "leader", "label"]) map.removeLayer(l[k]);
   layers.clear();
+  traces.clear();
+  ui.selected = null;
+  renderWhy();
   $("rows").innerHTML = "";
   $("trackCount").textContent = "0";
   ui.tracksSeen = 0;
@@ -140,10 +148,89 @@ function selectTrack(id, pan) {
   for (const tr of $("rows").children) tr.classList.toggle("sel", Number(tr.dataset.id) === id);
   const l = layers.get(id);
   if (l && pan) { map.panTo(l.dot.getLatLng()); l.dot.openTooltip(); }
+  renderWhy();
 }
 
+// ------------------------------------------------------------------ decision trace
+
+// Each snapshot carries only a track's newest decisions. Their numbers (from
+// trace_total) say exactly which ones are new, so the page can build a longer
+// history than any single snapshot holds.
+function mergeTrace(t) {
+  if (!Array.isArray(t.trace)) return;
+  let h = traces.get(t.id);
+  if (!h || t.trace_total < h.total) { h = { total: 0, events: [] }; traces.set(t.id, h); }
+  const first = t.trace_total - t.trace.length;
+  t.trace.forEach((e, i) => { if (first + i >= h.total) h.events.push({ ...e, n: first + i }); });
+  h.total = t.trace_total;
+  // Routine decisions make way first, so a track's birth, manoeuvres and outages stay visible.
+  while (h.events.length > TRACE_KEEP) {
+    const oldest = h.events.findIndex(e => TRACE_ROUTINE.has(e.kind));
+    h.events.splice(Math.max(oldest, 0), 1);
+  }
+}
+
+function fmtStat(v) { return v >= 100 ? v.toFixed(0) : v.toFixed(1); }
+function fmtAgo(ns) {
+  const s = Math.max(0, ns / 1e9);
+  return s < 0.05 ? "now" : s < 60 ? `${s.toFixed(1)} s` : fmtTime(s);
+}
+function traceSensor(id) {
+  return ui.sensorNames && ui.sensorNames[id] ? sensorName(id) : `sensor ${esc(id)}`;
+}
+function traceLabel(e) {
+  const s = traceSensor(e.sensor);
+  const has = e.d2 != null && e.gate != null;
+  const gated = has ? `d² ${fmtStat(e.d2)} / gate ${fmtStat(e.gate)}` : "";
+  const nis = has ? `: innovation ${fmtStat(e.d2)} / threshold ${fmtStat(e.gate)}` : "";
+  switch (e.kind) {
+    case "initiated": return `Started from ${s}`;
+    case "associated": return `Associated ${s}${has ? `: ${gated}` : ""}`;
+    case "competed": return `Competed: measurement ${e.other ? `went to track ${esc(e.other)}` : "left unassigned"} (${s}${has ? `, ${gated}` : ""})`;
+    case "near miss": return `Near miss from ${s}${has ? `: ${gated}` : ""}`;
+    case "update rejected": return `Filter rejected update from ${s}${has ? `: ${gated}` : ""}`;
+    case "confirmed": return "Confirmed";
+    case "coasting": return "Coasting: no recent position measurements";
+    case "recovered": return "Recovered: position measurements resumed";
+    case "dropped": return `Dropped: ${esc(e.drop_reason)}`;
+    case "manoeuvre start": return `Manoeuvre detected${nis}`;
+    case "manoeuvre end": return `Manoeuvre ended${nis}`;
+    default: return esc(e.kind);
+  }
+}
+// How close a measurement came to the gate. Manoeuvre events carry a different statistic.
+function gateCue(e) {
+  if (e.d2 == null || !(e.gate > 0) || e.kind.startsWith("manoeuvre")) return "";
+  const ratio = e.d2 / e.gate;
+  const cls = ratio > 1 ? "out" : ratio >= GATE_CLOSE ? "close" : "";
+  const tag = cls === "close" ? '<span class="badge warn">Close to Gate</span>' : cls === "out" ? '<span class="badge err">Outside Gate</span>' : "";
+  return `<div class="gate ${cls}" title="d² is ${Math.round(ratio * 100)}% of the gate">` +
+    `<span class="gate-meter"><i style="width:${Math.min(ratio, 1) * 100}%"></i></span>${tag}</div>`;
+}
+
+function renderWhy() {
+  const id = ui.selected;
+  const h = id == null ? null : traces.get(id);
+  $("why").hidden = id == null;
+  if (id == null) return;
+  $("whyTitle").textContent = `Why Track ${id}`;
+  $("whyNote").hidden = !ui.reported || ui.reported.has(id);
+  $("whyNote").textContent = "No longer reported: dropped, or hidden by a filter. These are the last decisions received.";
+  const events = h ? h.events : [];
+  const list = $("whyList"), top = list.scrollTop;
+  list.innerHTML = [...events].reverse().map(e => {
+    return `<li class="${TRACE_ROUTINE.has(e.kind) ? "" : "key"}"><span class="at">${fmtAgo((ui.traceNow || 0) - e.time_ns)}</span>` +
+      `<span class="what">${traceLabel(e)}</span>${gateCue(e)}</li>`;
+  }).join("");
+  list.scrollTop = top;
+  $("whyFoot").textContent = events.length
+    ? `Newest first · ${fmtNum(events.length)} of ${fmtNum(h.total)} decisions · times are before the latest update`
+    : "No decisions received for this track yet.";
+}
+$("whyClose").onclick = () => selectTrack(null, false);
+
 function render(snap) {
-  if (snap.type !== "sifted.tracks" || snap.version !== 1 || !Array.isArray(snap.tracks)) {
+  if (snap.type !== "sifted.tracks" || snap.version !== SNAPSHOT_VERSION || !Array.isArray(snap.tracks)) {
     setConn("unsupported data", "err");
     return;
   }
@@ -157,7 +244,11 @@ function render(snap) {
   const seen = new Set();
   const rows = [];
   const tracks = [...snap.tracks].sort((a, b) => a.id - b.id);
+  ui.reported = new Set(tracks.map(t => t.id));
+  ui.traceNow = snap.time_ns;
+  for (const id of traces.keys()) if (!ui.reported.has(id) && id !== ui.selected) traces.delete(id);
   for (const t of tracks) {
+    mergeTrace(t);
     if (typeof t.lat !== "number" || typeof t.lon !== "number") continue;
     if (t.status === "tentative" && !showTentative) continue;
     seen.add(t.id);
@@ -180,7 +271,7 @@ function render(snap) {
           icon: L.divIcon({ className: "", html: "", iconSize: [0, 0] }) }).addTo(map),
       };
       l.dot.bindTooltip("", { direction: "top", className: "trk", offset: [0, -6] });
-      l.dot.on("click", () => selectTrack(t.id, false));
+      l.dot.on("click", () => { selectTrack(t.id, false); showTab("tracks"); });
       layers.set(t.id, l);
       ui.tracksSeen++;
     }
@@ -210,6 +301,7 @@ function render(snap) {
   $("rows").innerHTML = rows.join("");
   $("trackCount").textContent = String(layers.size);
   updateTracksEmpty();
+  renderWhy();
   if ($("follow").checked && layers.size > 0) {
     const view = map.getBounds();
     const outside = [...layers.values()].some(l => !view.contains(l.dot.getLatLng()));
@@ -405,8 +497,8 @@ function watchItems(a) {
     items.push([95, "The south-western track leaves coverage: it coasts (amber, dashed), then is dropped."]);
   } else {
     items.push([0, "Tracks appear once confirmed by 3 radar hits. Turn on \"Show tentative tracks\" (Tracks tab) to see them earlier."]);
-    items.push([Math.min(10, D / 4), "Click a track in the Tracks tab to see its uncertainty, speed and contributing sensors."]);
   }
+  items.push([Math.min(10, D / 4), "Click a track on the map or in the Tracks tab to see why the system believes it: each association, near miss and lifecycle decision."]);
   if (a.network === "lossy" || a.network === "outage") {
     items.push([1, "The network loses, delays, reorders and duplicates frames: duplicates are suppressed and late frames put back in order (counters below)."]);
   }
