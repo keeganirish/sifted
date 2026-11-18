@@ -141,6 +141,12 @@
 
         <h2 class="section-title">Fusion Service</h2>
         <div class="stats" id="statsGrid"></div>
+
+        <div id="truthPanel" hidden>
+          <h2 class="section-title">Ground Truth</h2>
+          <div class="stats two" id="truthStats"></div>
+          <p class="muted small truth-note" id="truthNote"></p>
+        </div>
       </div>
     </section>
 
@@ -159,8 +165,8 @@
         <ol class="why-list" id="whyList"></ol>
         <p class="why-foot" id="whyFoot"></p>
       </section>
-      <table class="tracks">
-        <thead><tr><th>Track</th><th>State</th><th title="1-sigma position uncertainty">σ (m)</th><th title="Ground speed">Speed</th><th>Sensors</th></tr></thead>
+      <table class="tracks" id="tracksTable">
+        <thead><tr><th>Track</th><th>State</th><th title="1-sigma position uncertainty">σ (m)</th><th class="terr" title="Distance to the matched simulated target. Display aid; the scorecard is authoritative.">Error (m)</th><th title="Ground speed">Speed</th><th>Sensors</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <div class="empty" id="tracksEmpty">
@@ -209,8 +215,12 @@
       <span><i class="dashed" style="--c:var(--coasting)"></i>Coasting</span>
       <span><i style="--c:var(--tentative)"></i>Tentative</span>
       <span><i class="ring"></i>Uncertainty</span>
+      <span class="truth-key" hidden><i class="diamond"></i>True Target</span>
+      <span class="truth-key" hidden><i class="diamond missed"></i>Missed Target</span>
+      <span class="truth-key" hidden><i class="flagged"></i>Unmatched Track</span>
     </div>
     <div class="map-tools">
+      <button class="btn btn-ghost btn-sm" id="truthBtn" hidden aria-pressed="false" title="Overlay the simulated targets' true positions and each track's error (display aid)">Show Ground Truth</button>
       <button class="btn btn-ghost btn-sm" id="fitBtn" title="Zoom to all tracks">Fit Tracks</button>
       <button class="btn btn-ghost btn-sm" id="themeBtn" title="Switch map style">Light Map</button>
     </div>

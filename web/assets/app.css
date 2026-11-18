@@ -17,6 +17,9 @@
   --confirmed: #3ea6ff;
   --coasting: #f0b429;
   --tentative: #8b98a8;
+  --truth: #e879f9;
+  --missed: #ff5c5c;
+  --unmatched: #ff7a45;
   --radius: 10px;
   --radius-sm: 7px;
   --shadow: 0 8px 30px rgba(0, 0, 0, .45);
@@ -181,6 +184,8 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 .stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 10px; }
 .stat b { display: block; font: 600 17px var(--mono); font-variant-numeric: tabular-nums; }
 .stat span { font-size: 11px; color: var(--muted); }
+.stats.two { grid-template-columns: 1fr 1fr; }
+.truth-note { margin: 8px 0 0; }
 
 /* ---------- tracks */
 .toggles { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
@@ -206,6 +211,9 @@ table.tracks { width: 100%; border-collapse: collapse; font-size: 12.5px; font-v
 .tracks .st i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
 .tracks tr.tentative td { color: var(--muted); }
 .tracks tr.coasting .st { font-style: italic; }
+table.tracks:not(.truth-on) .terr { display: none; }
+table.tracks.truth-on th, table.tracks.truth-on td { padding-left: 3px; padding-right: 3px; }
+.tracks .terr.none { color: var(--unmatched); font-weight: 600; }
 .why { position: sticky; top: 0; z-index: 2; background: var(--panel-2); border: 1px solid var(--border-2);
   border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; box-shadow: var(--shadow); }
 .why-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
@@ -267,8 +275,22 @@ table.tracks { width: 100%; border-collapse: collapse; font-size: 12.5px; font-v
 .legend i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); display: inline-block; }
 .legend i.dashed { background: transparent; border: 2px dashed var(--c); width: 10px; height: 10px; }
 .legend i.ring { background: rgba(62, 166, 255, .15); border: 1px solid var(--confirmed); width: 14px; height: 14px; }
+.legend i.diamond { width: 9px; height: 9px; border-radius: 1px; background: transparent; border: 2px solid var(--truth); transform: rotate(45deg); }
+.legend i.diamond.missed { border-color: var(--missed); background: var(--missed); }
+.legend i.flagged { background: var(--confirmed); box-shadow: 0 0 0 2px var(--unmatched); }
 .map-tools { position: absolute; top: 12px; right: 12px; z-index: 450; display: flex; gap: 6px; }
 .map-tools .btn { background: rgba(16, 22, 31, .9); }
+.map-tools .btn[aria-pressed="true"] { color: var(--text); border-color: var(--truth); }
+
+/* Ground-truth overlay: hollow diamonds, so the track dot inside stays visible. */
+.truth-mark { position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; }
+.truth-mark i { position: absolute; inset: 2px; border: 2px solid var(--truth); border-radius: 1px; transform: rotate(45deg);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .75), inset 0 0 0 1px rgba(0, 0, 0, .55); }
+.truth-mark.missed i { border-color: var(--missed); background: rgba(255, 92, 92, .55); }
+.truth-mark.acquiring i, .truth-mark.uncovered i { border-style: dotted; opacity: .75; }
+.truth-mark b { position: absolute; left: 3px; top: 14px; font: 600 10px var(--mono); color: var(--truth); white-space: nowrap;
+  text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 2px #000; }
+.truth-mark.missed b { color: var(--missed); }
 .map-note { position: absolute; top: 12px; left: 60px; z-index: 450; font-size: 12px; color: #ffd36a;
   background: rgba(58, 46, 16, .92); border: 1px solid #5a4716; padding: 6px 10px; border-radius: var(--radius-sm); }
 

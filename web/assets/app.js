@@ -125,6 +125,7 @@ function clearTracks() {
   for (const l of layers.values()) for (const k of ["dot", "ring", "leader", "label"]) map.removeLayer(l[k]);
   layers.clear();
   traces.clear();
+  resetTruthView();
   ui.selected = null;
   renderWhy();
   $("rows").innerHTML = "";
@@ -276,8 +277,10 @@ function render(snap) {
       ui.tracksSeen++;
     }
     const dash = t.status === "coasting" ? "4 4" : null;
-    l.dot.setLatLng(pos).setStyle({ color: "#0b1017", fillColor: color });
-    l.dot.setTooltipContent(tip);
+    l.tip = tip;
+    l.sigma = t.sigma_m;
+    l.dot.setLatLng(pos).setStyle({ ...trackDotStyle(t.id), fillColor: color });
+    l.dot.setTooltipContent(tip + truthTip(t.id, t.sigma_m));
     l.ring.setLatLng(pos).setRadius(Math.max(t.sigma_m, 1)).setStyle({ color, fillColor: color, dashArray: dash });
     l.leader.setLatLngs([pos, end]).setStyle({ color, dashArray: dash });
     l.label.setLatLng(pos).setIcon(L.divIcon({
@@ -289,7 +292,7 @@ function render(snap) {
     rows.push(`<tr class="${esc(t.status)}${ui.selected === t.id ? " sel" : ""}" data-id="${t.id}">` +
       `<td class="id">${t.id}</td>` +
       `<td><span class="st" style="--c:${stColor}"><i></i>${esc(t.status)}${t.manoeuvring ? " ↻" : ""}</span></td>` +
-      `<td>${t.sigma_m.toFixed(1)}</td><td>${speed.toFixed(0)} m/s</td>` +
+      `<td>${t.sigma_m.toFixed(1)}</td>${truthCellHtml(t.id, t.sigma_m)}<td>${speed.toFixed(0)} m/s</td>` +
       `<td title="Sensor ids: ${esc((t.sensors || []).join(", "))}">${(t.sensors || []).map(id => sensorName(id, false)).join(", ") || "–"}</td></tr>`);
   }
   for (const [id, l] of layers) {  // tracks that disappeared (dropped or filtered)
@@ -308,7 +311,208 @@ function render(snap) {
     if (!fitted || (autoFit && outside)) fitted = fitTracks();
   }
   updateOverlay();
+  truthOnSnapshot(snap);
 }
+
+// ------------------------------------------------------------------ ground truth overlay
+
+// A display aid for simulated runs and their replays. The launcher does the time
+// alignment and matching (sim/sifted_sim/truth.py); this page only draws the answer.
+const TRUTH_COLORS = { truth: "#e879f9", missed: "#ff5c5c", unmatched: "#ff7a45" };
+const truth = {
+  on: store.get("sifted.truth") === "1",
+  run: null,            // run whose truth this page has asked about
+  runGen: 0,            // discards the answer about a run no longer shown
+  available: false,
+  gate: null,           // match distance, from the launcher
+  gen: 0,               // discards comparisons from before a reset
+  busy: false,
+  queued: null,         // newest snapshot waiting for a comparison
+  lastSnap: null,
+  lastT: null,
+  pairs: {},            // target -> track, handed back with each request
+  result: null,
+  unmatched: new Set(),
+  marks: new Map(),     // target id -> {mark, trail, state}
+};
+
+function truthShown() { return truth.on && truth.available; }
+function truthVerdict(id) {
+  return truthShown() && truth.result ? truth.result.tracks[id] || null : null;
+}
+function truthFlagged(id) { return truthShown() && truth.unmatched.has(id); }
+function trackDotStyle(id) {
+  return truthFlagged(id) ? { color: TRUTH_COLORS.unmatched, weight: 3 } : { color: "#0b1017", weight: 2 };
+}
+function errorInSigma(errorM, sigma) { return sigma > 0 ? `${(errorM / sigma).toFixed(1)}σ` : "–"; }
+function truthTip(id, sigma) {
+  const v = truthVerdict(id);
+  if (v) return `<br>Error ${v.error_m.toFixed(1)} m (${errorInSigma(v.error_m, sigma)}) to target ${esc(v.target)}`;
+  return truthFlagged(id) ? "<br>No true target within the match distance" : "";
+}
+function truthCell(id, sigma) {
+  const v = truthVerdict(id);
+  if (v) return { cls: "terr", text: v.error_m.toFixed(1), title: `${errorInSigma(v.error_m, sigma)} · target ${v.target}` };
+  if (truthFlagged(id)) return { cls: "terr none", text: "None", title: "No true target within the match distance: possibly a false track" };
+  return { cls: "terr", text: "–", title: "" };
+}
+function truthCellHtml(id, sigma) {
+  const c = truthCell(id, sigma);
+  return `<td class="${c.cls}" title="${esc(c.title)}">${esc(c.text)}</td>`;
+}
+
+// Tracks are drawn before their comparison returns, so refresh them once it has.
+function refreshTruthTracks() {
+  for (const [id, l] of layers) {
+    l.dot.setStyle(trackDotStyle(id));
+    if (l.tip) l.dot.setTooltipContent(l.tip + truthTip(id, l.sigma));
+  }
+  for (const tr of $("rows").children) {
+    const id = Number(tr.dataset.id), td = tr.querySelector(".terr"), l = layers.get(id);
+    if (!td || !l) continue;
+    const c = truthCell(id, l.sigma);
+    td.className = c.cls;
+    td.textContent = c.text;
+    td.title = c.title;
+  }
+}
+
+function truthIcon(id, state) {
+  return L.divIcon({ className: "", iconSize: [0, 0],
+    html: `<div class="truth-mark ${esc(state)}"><i></i><b>T${esc(id)}</b></div>` });
+}
+function drawTruth(r) {
+  const seen = new Set();
+  for (const t of r.targets) {
+    seen.add(t.id);
+    const pos = [t.lat, t.lon];
+    const color = t.state === "missed" ? TRUTH_COLORS.missed : TRUTH_COLORS.truth;
+    let m = truth.marks.get(t.id);
+    if (!m) {
+      m = {
+        trail: L.polyline(t.trail, { color, weight: 2, opacity: 0.8, interactive: false }).addTo(map),
+        mark: L.marker(pos, { interactive: false, keyboard: false, icon: truthIcon(t.id, t.state) }).addTo(map),
+        state: t.state,
+      };
+      truth.marks.set(t.id, m);
+    }
+    m.trail.setLatLngs(t.trail).setStyle({ color });
+    m.mark.setLatLng(pos);
+    if (m.state !== t.state) { m.mark.setIcon(truthIcon(t.id, t.state)); m.state = t.state; }
+  }
+  for (const [id, m] of truth.marks) {
+    if (!seen.has(id)) { map.removeLayer(m.mark); map.removeLayer(m.trail); truth.marks.delete(id); }
+  }
+}
+
+function renderTruthStats(r) {
+  const unmatched = r.unmatched_tracks.length;
+  const cells = [
+    ["Mean Error", r.mean_error_m == null ? "–" : `${r.mean_error_m.toFixed(1)} m`],
+    ["Targets Matched", `${r.matched} / ${r.present}`],
+    ["Missed Targets", r.missed],
+    ["Unmatched Tracks", unmatched],
+  ];
+  $("truthStats").innerHTML = cells.map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join("");
+  $("truthNote").textContent = r.in_span
+    ? `Display aid: targets are paired one-to-one with tracks within ${truth.gate} m. The scorecard and tests are the authoritative measure of accuracy.`
+    : "The track stream's time is outside this run's ground truth, so nothing is compared.";
+}
+
+function updateTruthControls() {
+  const btn = $("truthBtn"), shown = truthShown();
+  btn.hidden = !truth.available;
+  btn.textContent = truth.on ? "Hide Ground Truth" : "Show Ground Truth";
+  btn.setAttribute("aria-pressed", String(truth.on));
+  $("truthPanel").hidden = !shown;
+  $("tracksTable").classList.toggle("truth-on", shown);
+  for (const el of document.querySelectorAll(".truth-key")) el.hidden = !shown;
+}
+
+function resetTruthView({ keepSnapshot = false } = {}) {
+  truth.gen++;
+  truth.pairs = {};
+  truth.result = null;
+  truth.unmatched = new Set();
+  truth.queued = null;
+  truth.lastT = null;
+  if (!keepSnapshot) truth.lastSnap = null;
+  for (const m of truth.marks.values()) { map.removeLayer(m.mark); map.removeLayer(m.trail); }
+  truth.marks.clear();
+  $("truthStats").innerHTML = "";
+  refreshTruthTracks();
+}
+
+function applyTruth(r) {
+  if (!r.available) {
+    truth.available = false;
+    resetTruthView();
+    updateTruthControls();
+    return;
+  }
+  truth.pairs = r.pairs;
+  truth.result = r;
+  truth.unmatched = new Set(r.unmatched_tracks);
+  drawTruth(r);
+  refreshTruthTracks();
+  renderTruthStats(r);
+}
+
+// One request at a time; snapshots that arrive meanwhile collapse to the newest.
+async function pumpTruth() {
+  if (truth.busy || !truthShown() || !truth.queued) return;
+  const snap = truth.queued, gen = truth.gen;
+  truth.queued = null;
+  truth.busy = true;
+  try {
+    const tracks = snap.tracks.filter(t => Number.isFinite(t.x) && Number.isFinite(t.y))
+      .map(t => ({ id: t.id, x: t.x, y: t.y, status: t.status }));
+    const r = await api("/api/truth/compare", { run: truth.run, time_ns: snap.time_ns, origin: snap.origin, tracks, pairs: truth.pairs });
+    if (gen === truth.gen) applyTruth(r);
+  } catch (e) {
+    console.warn("ground truth comparison failed:", e.message);
+  } finally {
+    truth.busy = false;
+    pumpTruth();
+  }
+}
+
+function truthOnSnapshot(snap) {
+  if (truth.lastT != null && snap.time_ns < truth.lastT) resetTruthView();  // a replay restarted
+  truth.lastT = snap.time_ns;
+  truth.lastSnap = snap;
+  truth.queued = snap;
+  pumpTruth();
+}
+
+// Asks once per run whether it has truth (ADS-B and older recordings do not).
+function syncTruthRun(a) {
+  const id = a.id || null;
+  if (id === truth.run) return;
+  truth.run = id;
+  truth.available = false;
+  const gen = ++truth.runGen;
+  resetTruthView();
+  updateTruthControls();
+  if (!id) return;
+  api(`/api/truth?run=${encodeURIComponent(id)}`).then(r => {
+    if (gen !== truth.runGen) return;
+    truth.available = !!r.available;
+    truth.gate = r.match_distance_m;
+    updateTruthControls();
+    truth.queued = truth.lastSnap;
+    pumpTruth();
+  }).catch(() => { if (gen === truth.runGen) truth.run = null; });  // the next status poll retries
+}
+
+$("truthBtn").onclick = () => {
+  truth.on = !truth.on;
+  store.set("sifted.truth", truth.on ? "1" : "0");
+  resetTruthView({ keepSnapshot: true });
+  updateTruthControls();
+  truth.queued = truth.lastSnap;
+  pumpTruth();
+};
 
 // Sensor ids -> readable names, from the running scenario's sensor table.
 const KIND_NAMES = { range_bearing: "Radar", bearing_only: "Camera", geo_position: "ADS-B" };
@@ -585,6 +789,7 @@ function applyStatus(st) {
   }
 
   if (a.scenario !== ui.sensorScenario) { ui.sensorScenario = a.scenario; updateSensorNames(a); }
+  syncTruthRun(a);
   renderLog(st.log || []);
   if (st.seq !== ui.lastSeq) { ui.lastSeq = st.seq; refreshRuns(); }
   if (!ui.wsOpen && !wantStream()) setConn("idle", "");

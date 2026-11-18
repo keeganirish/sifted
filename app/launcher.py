@@ -34,6 +34,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import webbrowser
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -44,6 +45,7 @@ sys.path.insert(0, str(SIM_DIR))
 try:
     from sifted_sim import generate as simgen  # noqa: E402  (stdlib-only package)
     from sifted_sim import send as simsend  # noqa: E402
+    from sifted_sim import truth as simtruth  # noqa: E402
 except Exception as exc:  # pragma: no cover - only on a broken checkout
     raise SystemExit(f"sifted: cannot import the simulators in {SIM_DIR}: {exc}")
 
@@ -99,6 +101,7 @@ ADSB_TRACKER_ARGS = ["--initial-velocity-sigma", "250", "--tentative-timeout", "
                      "--coast-after", "60", "--drop-after", "180", "--max-position-sigma", "10000"]
 
 MAX_RUNS_KEPT = 25
+TRUTH_CACHE_RUNS = 4  # parsed truth files kept in memory for the overlay
 
 
 # --------------------------------------------------------------------------- environment
@@ -380,6 +383,9 @@ class Session:
         self.error: str | None = None
         self.verify: dict = {}
         self.seq = 0            # bumps on every state change, so the UI can tell
+        # Separate from self.lock, which is held while a run starts up.
+        self.truth_lock = threading.Lock()
+        self.truth_cache: collections.OrderedDict[str, simtruth.Truth] = collections.OrderedDict()
 
     # ---- helpers
 
@@ -520,6 +526,9 @@ class Session:
                 run_dir = self.runs_dir / f"{stamp}-{scenario}-{n}"
             run_dir.mkdir(parents=True)
             shutil.copy(sdir / "sensors.cfg", run_dir / "sensors.cfg")
+            # Kept with the recording: the simulator may change after this run was
+            # made. Only the ground-truth overlay reads it; a replay never does.
+            shutil.copy(sdir / "truth.csv", run_dir / "truth.csv")
             info = {
                 "id": run_dir.name, "scenario": scenario, "title": meta["title"],
                 "started": dt.datetime.now().isoformat(timespec="seconds"),
@@ -762,6 +771,46 @@ class Session:
             raise SessionError("That run no longer exists.")
         return d
 
+    def _load_truth(self, run_id: str) -> tuple[simtruth.Truth | None, str]:
+        """A run's ground truth, or None and the reason it has none."""
+        run_dir = self._run_dir(run_id)
+        with self.truth_lock:
+            cached = self.truth_cache.get(run_id)
+            if cached is not None:
+                self.truth_cache.move_to_end(run_id)
+                return cached, ""
+        path = run_dir / "truth.csv"
+        if not path.is_file():
+            try:
+                live = json.loads((run_dir / "meta.json").read_text()).get("scenario") == "adsb"
+            except (OSError, ValueError):
+                live = False
+            return None, ("Live ADS-B has no ground truth." if live
+                          else "This recording was made without ground truth.")
+        try:
+            if path.stat().st_size > simtruth.MAX_TRUTH_BYTES:
+                raise simtruth.TruthError("truth file is too large")
+            truth = simtruth.parse_truth(path.read_text(encoding="ascii"))
+        except (OSError, ValueError) as e:  # TruthError and UnicodeDecodeError are ValueErrors
+            self.note(f"Ground truth of {run_id} is unreadable: {e}", "error")
+            return None, "This recording's ground truth could not be read."
+        with self.truth_lock:
+            self.truth_cache[run_id] = truth
+            while len(self.truth_cache) > TRUTH_CACHE_RUNS:
+                self.truth_cache.popitem(last=False)
+        return truth, ""
+
+    def truth(self, run_id: str) -> dict:
+        truth, reason = self._load_truth(run_id)
+        return truth.payload() if truth else {"available": False, "reason": reason}
+
+    def truth_compare(self, run_id: str, body: dict) -> dict:
+        """Truth against one snapshot's tracks, for the overlay. Changes nothing."""
+        truth, reason = self._load_truth(run_id)
+        if truth is None:
+            return {"available": False, "reason": reason}
+        return simtruth.compare(truth, simtruth.parse_compare_request(body))
+
     def runs(self) -> list[dict]:
         out = []
         for d in sorted(self.runs_dir.iterdir(), reverse=True):
@@ -834,10 +883,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._host_ok():  # DNS-rebinding guard
             self.send_error(403, "Forbidden host")
             return
-        path = self.path.split("?", 1)[0]
+        path, _, query = self.path.partition("?")
         if path.startswith("/api/"):
             try:
-                self._json(200, self.app.get(path))
+                self._json(200, self.app.get(path, query))
             except KeyError:
                 self._json(404, {"error": "not found"})
             except SessionError as e:
@@ -880,6 +929,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._json(500, {"error": f"internal error: {e}"})
 
 
+def truth_run_param(query: str) -> str:
+    """The run id of GET /api/truth?run=<id>; any other query is refused."""
+    try:
+        fields = urllib.parse.parse_qsl(query, keep_blank_values=True, strict_parsing=True,
+                                        max_num_fields=1)
+    except ValueError:
+        raise SessionError("Expected exactly one parameter: run.") from None
+    if len(fields) != 1 or fields[0][0] != "run":
+        raise SessionError("Expected exactly one parameter: run.")
+    return fields[0][1]
+
+
 class App:
     def __init__(self, cfg: argparse.Namespace, fusiond: pathlib.Path | None):
         self.cfg = cfg
@@ -920,7 +981,9 @@ class App:
             "adsb_authenticated": bool(os.environ.get("OPENSKY_CLIENT_ID")),
         }
 
-    def get(self, path: str):
+    def get(self, path: str, query: str = ""):
+        if path == "/api/truth":
+            return self.session.truth(truth_run_param(query))
         if path == "/api/config":
             return self.config()
         if path == "/api/status":
@@ -934,6 +997,8 @@ class App:
 
     def post(self, path: str, body: dict):
         s = self.session
+        if path == "/api/truth/compare":  # read-only; answers with the comparison, not the status
+            return s.truth_compare(str(body.get("run", "")), body)
         if path == "/api/run":
             s.start_run(str(body.get("scenario", "demo")), float(body.get("speed", 1)),
                         str(body.get("network", "perfect")), str(body.get("fault", "none")))

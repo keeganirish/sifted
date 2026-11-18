@@ -182,6 +182,8 @@ and DNS rebinding):
 | `GET /api/scenarios` | scenario names, descriptions, durations, sensors |
 | `GET /api/status` | current activity, daemon counters, verify result, recent log lines |
 | `GET /api/runs` | recorded runs (newest first; the last 25 are kept) |
+| `GET /api/truth?run=<id>` | the run's ground truth (`truth.csv`, copied into the recording), or `{available: false, reason}` for ADS-B and older recordings |
+| `POST /api/truth/compare` | `{run, time_ns, origin, tracks, pairs}`: truth at a snapshot's time matched to its tracks, for the map overlay. Read-only display aid (`sim/sifted_sim/truth.py`); the scorecard stays authoritative |
 | `POST /api/run` | `{scenario, speed, network: perfect\|lossy\|outage, fault: none\|restart\|dropout\|stuck}` |
 | `POST /api/replay` | `{id, pace}`: replay a recording onto the map |
 | `POST /api/verify` | `{id}`: replay as fast as possible and compare with the live output |
