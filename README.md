@@ -4,277 +4,213 @@
 
 <h1 align="center">Sifted</h1>
 
-<p align="center"><strong>Signal, sifted.</strong> Deterministic multi-sensor track fusion in C++, with a live operator map.</p>
+<p align="center">Deterministic multi-sensor, multi-target track fusion in C++20.</p>
+
+Sifted estimates the position and velocity of multiple targets from noisy,
+partial and out-of-order measurements. Radar (range-bearing), camera
+(bearing-only) and ADS-B (geodetic) measurements arrive over UDP. A
+single-threaded engine associates them to tracks and filters them, and snapshots
+are published over WebSocket to a live map. Every input is recorded with its
+receive time, so any run, including one with packet loss or sensor faults, can be
+replayed and compared byte for byte with the original output.
 
 <p align="center">
-  <img src="docs/images/running.png" alt="Sifted running the guided demo: five tracks on the map, the run's progress and a 'what to watch' guide in the side panel" width="900">
+  <img src="docs/images/running.png" alt="Sifted running the guided demo: five tracks on an OpenStreetMap background, with the run's progress and a timeline of what to watch in the side panel" width="900">
 </p>
 
-Sifted takes noisy, partial and sometimes conflicting measurements from several
-sensors (simulated radars and cameras, or real aircraft broadcasts) and turns
-them into one coherent picture of what is out there. It works out which
-measurements belong to which object, estimates where each object is and where
-it is heading, tracks objects as they appear and disappear, and shows all of it
-live on a map, with how certain it is about each one.
+## Architecture
 
-It is a small-scale, from-scratch take on the core problem behind modern
-situational-awareness software, built to show systems-level engineering:
-determinism, traceability, robust handling of untrusted input, thread safety,
-networking and measured performance.
+```mermaid
+flowchart TD
+    SENSORS["Sensors and simulators<br/>radar, camera, ADS-B"] -->|UDP datagrams| RX
 
-## Features
+    subgraph RXT["UDP receive thread"]
+        RX["size check → per-source rate limit<br/>→ strict decode → stamp receive time"]
+    end
 
-- **Guided scenarios.** Crossing aircraft, close passes, formations, targets
-  entering and leaving coverage, manoeuvres. Pick one and press Run.
-- **Sensor fusion.** Radar (range and bearing) and camera (bearing only)
-  measurements are combined with Kalman and extended Kalman filters, with
-  manoeuvre detection and an uncertainty estimate for every track.
-- **Data association.** Each measurement is matched to a track or starts a new
-  one (Mahalanobis gating, global nearest-neighbour assignment); tracks that go
-  quiet coast, then are dropped.
-- **Break things on purpose.** Add packet loss, delay, reordering, duplicates or
-  a full network outage, or make a sensor reboot, freeze or go silent, and watch
-  the tracker cope.
-- **Record, replay, verify.** Every run is recorded. Replay it on the map, or
-  verify that the replay's output is **bit-for-bit identical** to the live run.
-- **Live aircraft.** Track real aircraft from the OpenSky Network's public
-  ADS-B feed.
-- **Built to be trusted.** Every parser of untrusted input is fuzzed; ASan,
-  UBSan and ThreadSanitizer run in CI; about 3,000 targets per engine thread
-  within a 100 ms p99 budget ([benchmarks](docs/benchmarks.md)).
-- **Measured against ground truth.** One command scores tracking accuracy
-  (RMSE, missed targets, ID switches, false tracks, outage recovery, NEES/NIS)
-  for every scenario under every network impairment and sensor fault
-  ([evaluation scorecard](docs/evaluation.md)).
+    RX -->|"BoundedQueue: drop and count when full"| PIPE
 
-## Install
+    subgraph ENG["Engine thread"]
+        PIPE["<b>net::Pipeline</b><br/>dedup → clock gate → reorder stage → scan assembly"]
+        PIPE --> CORE["<b>Engine</b><br/>gate and associate → estimate → track store"]
+    end
 
-You need about 1 GB of free disk space and an internet connection for the
-first install. The installer checks what's already there, installs only what
-is missing (it asks first), builds Sifted, tests it end to end and adds a
-shortcut. It's safe to run again at any time.
+    PIPE -->|"every frame and tick,<br/>with its receive time"| LOG[("Event log")]
+    LOG -.->|"replay: same pipeline,<br/>simulated clock"| PIPE
+    CORE --> OUT["Output lines<br/>byte-compared on replay"]
+    CORE -->|"latest snapshot only"| WS
 
-First, get the code: **Code → Download ZIP** on GitHub (then unzip it), or
+    subgraph WST["WebSocket thread"]
+        WS["publish to clients;<br/>slow clients skip snapshots"]
+    end
 
-```bash
-git clone <this repository's URL> sifted
+    WS --> MAP["Operator map"]
 ```
 
-### Windows 10 / 11
+The engine thread is the only thread that touches tracker state. The other two
+hand data over at two points: the bounded queue, and a snapshot pointer swapped
+under a mutex. The [thread ownership table](docs/design.md#2-architecture-and-threading)
+lists what each thread owns and shares.
 
-1. Open the `sifted` folder and **double-click `install.cmd`**.
-2. If Windows Subsystem for Linux (WSL) isn't set up yet, the installer offers
-   to install it. That needs administrator rights and a **restart**; after the
-   restart, open **Ubuntu** from the Start menu once to choose a Linux user name
-   and password, then double-click `install.cmd` again.
-3. When it finishes, Sifted opens by itself and the installer window closes.
-   Next time, start **Sifted** from your desktop or Start menu.
+The code is split into two libraries so that the determinism rules follow the
+link graph:
 
-Sifted's fusion service is Linux software, so on Windows it runs inside WSL;
-the installer and the shortcut handle that for you.
+- **`sifted_core`** has no threads, sockets or wall clock. It holds the wire
+  codec, estimation, association, track store, event log and the pure ingest
+  pipeline. Time is an input, so the same ordered input gives the same output.
+- **`sifted_net`** is the OS-facing edge: UDP, WebSocket, rate limiter and system
+  clock. Only the daemon, the tests and the WebSocket fuzz target link it.
 
-### macOS
+The full rules are in the [determinism contract](docs/design.md#3-determinism-contract).
 
-1. Install [Homebrew](https://brew.sh) if you don't have it (one command from
-   their home page).
-2. Open **Terminal**, go to the `sifted` folder, and run:
-   ```bash
-   ./install.sh
-   ```
-3. Start Sifted by double-clicking **Sifted.command** on your Desktop, or with `./sifted`.
+## Engineering evidence
 
-### Linux
+Accuracy figures come from seeded simulator scenarios scored against ground
+truth. One command regenerates the [evaluation scorecard](docs/evaluation.md).
 
-```bash
-cd sifted
-./install.sh
-./sifted
-```
-
-Supports apt (Debian, Ubuntu, Mint), dnf (Fedora, RHEL), pacman (Arch) and
-zypper (openSUSE). The installer also adds Sifted to your applications menu.
-
-### What the installer sets up
-
-| Component | Why | Installed from |
+| Claim | Measured | Proof |
 |---|---|---|
-| C++ compiler (GCC 11+ or recent Clang) | builds the fusion service | your package manager (Homebrew `gcc` on macOS if Apple's compiler is too old) |
-| CMake 3.21+ and Ninja | build tools | package manager, or a private copy in `build/tools` if yours is too old |
-| Eigen 3 | linear algebra (header-only) | package manager, or downloaded during the build |
-| Python 3.10+ | simulators and the app launcher (standard library only) | package manager |
-| WSL with Ubuntu (Windows only) | runs the fusion service | Microsoft |
+| **Estimation.** Constant-velocity Kalman filter with range-bearing and bearing-only EKF updates, in Joseph form | Position RMSE against unfiltered radar: 11.1 m vs 22.2 m on straight flight (0.50), 10.7 m vs 14.9 m in a 3 deg/s turn (0.72) | [`scenario_regression_test.cpp`](tests/scenario_regression_test.cpp), [design §6-7](docs/design.md#6-estimation-and-association) |
+| **Filter consistency.** The covariance matches the actual error when the model is right | 200-run Monte Carlo with matched model: NEES 4.02 at t = 90 s (95% interval 3.62-4.40, 4 dof), NIS 2.001 over 16,184 updates (1.969-2.031) | `ConsistencyMonteCarlo.MatchedModelIsConsistent` in [`consistency_test.cpp`](tests/consistency_test.cpp), [design §7](docs/design.md#filter-consistency) |
+| **Tracking accuracy.** All seven scenarios, direct engine feed | Mean RMSE 9.87 m, worst target 12.20 m; 0 missed target-instants, 0 ID switches, 0 false tracks | [Scorecard summary](docs/evaluation.md#summary-over-all-scenarios) |
+| **Association.** Chi-square gating (p = 0.999) and Hungarian global nearest neighbour. `formation_split` flies three targets 45 m apart (about 3 radar range sigmas), so assignment decides identity on every scan | GNN: 0 ID switches, worst target 11.58 m. Greedy: 2 ID switches, worst target 35.49 m. Over five noise seeds: 12 ID switches for GNN, 28 for greedy | `MultiTargetRegression.FormationSplit` in [`multi_target_regression_test.cpp`](tests/multi_target_regression_test.cpp), [ADR 0004](docs/adr/0004-association-and-lifecycle.md) |
+| **Determinism.** Replay reproduces the output bit for bit, including impaired and faulted runs | Live daemon run through the impairment proxy with a sensor restart: 2,056 output lines identical under `cmp`, with 117 frames lost to the outage, 89 to loss and 28 duplicated | `Replay.RecordedRunReplaysBitForBit`, `Reorder.ImpairedRecordedRunReplaysBitForBit`, `Faults.FaultedRunsAreDeterministic`; [design §3](docs/design.md#3-determinism-contract) |
+| **Degraded networks.** No reorder window against a 0.5 s window, at the severe level (8% loss plus bursts, delay 100 ms + U(0, 800 ms), 5% duplicates; 9 runs) | Out-of-order drops 29.0% → 0.1%, missed target-instants 6.52% → 0.52%, ID switches 6 → 1. Cost on a clean network: +0.35 m mean RMSE | [Design §9](docs/design.md#9-degraded-network-behaviour), [ADR 0009](docs/adr/0009-out-of-order-policy.md) |
+| **Outage recovery.** Every link down, mild impairment, 21 runs per row | 5 s outage: recovered in 1.3 s mean, 3.0 s worst. 15 s outage: 3.6 s mean, 4.0 s worst, with tracks re-initiated (54 ID switches in total) | [Scorecard summary](docs/evaluation.md#summary-over-all-scenarios), `DegradedNetwork.RecoveryAfterOutage` |
+| **Untrusted input.** Every C++ parser of external input is fuzzed with ASan and UBSan | 6 libFuzzer targets, each run for 60 s in CI. `fuzz_engine` also checks that results match an engine without the gate screen | [`fuzz/`](fuzz/README.md), [threat model](docs/threat-model.md), [CI](.github/workflows/ci.yml) |
+| **Concurrency.** ThreadSanitizer runs over the whole test suite | Includes live UDP flood tests with a concurrent consumer. A burst of 5,000 malformed datagrams enqueues 0 frames | `UdpFlood.*` in [`udp_flood_test.cpp`](tests/udp_flood_test.cpp), [design §2](docs/design.md#2-architecture-and-threading), [threat model](docs/threat-model.md#sensor-and-input-faults) |
+| **Gate screen.** A conservative bound skips pairs that cannot gate, with no change in results | 1,000 targets, 10% clutter: median scan 145 ms → 10.0 ms; instructions 8.55 G → 1.14 G (callgrind on a RelWithDebInfo build, 3 scans) | `GateScreen.NeverChangesResults` in [`gate_screen_test.cpp`](tests/gate_screen_test.cpp), [proof in design §10](docs/design.md#10-performance), [benchmarks](docs/benchmarks.md#profiling-and-the-one-optimisation) |
+| **Capacity.** One engine thread on a 2 vCPU VM, one scan per second (1 Hz), 10% clutter, p99 scan time ≤ 100 ms | 2,976 targets (about 4,150 live tracks). The p99 is noisy at this edge: 3,000 targets measured 125 ms in another sweep | [Benchmarks: tracks per core](docs/benchmarks.md#tracks-per-core), [ADR 0011](docs/adr/0011-benchmark-method.md) |
+| **End-to-end latency.** UDP send to WebSocket snapshot through the real daemon on loopback, 100 targets | Median 101 ms with the reorder window off, 502 ms with the default 0.5 s window. Scan assembly and the window dominate, not processing | [Benchmarks: end-to-end latency](docs/benchmarks.md#end-to-end-latency-daemon) |
 
-Nothing is installed outside your package manager and the project folder.
-Recordings are kept in `~/.local/share/sifted` (Linux and Windows/WSL) or
-`~/Library/Application Support/Sifted` (macOS).
-
-Installer options: `./install.sh --help` (for example `--yes` to skip
-questions, `--with-tests` to also run the full test suites). On Windows, pass
-the same as `install.cmd -Yes -WithTests`.
-
-## Using Sifted
-
-Start Sifted from its shortcut. It opens in its own window, with no browser
-tabs or address bar, and closing that window stops Sifted. You can also press
-**Quit**, the power button at the top right. On Windows the window is native,
-built on WebView2 (the Edge engine that ships with Windows), so it has its own
-taskbar icon. On macOS and Linux it's a Chrome or Edge "app window", or a normal
-browser tab if neither is installed.
-
-From a terminal, `./sifted` (Windows: `sifted.cmd`) starts Sifted with its
-messages visible; it then runs until you press Ctrl+C or Quit. The operator
-view is served at <http://127.0.0.1:8000/> if you want to open it in a browser
-yourself.
-
-1. **Run the guided demo.** It's offered when you first open Sifted. Five
-   aircraft fly past one radar and one camera; the side panel tells you what to
-   watch for as it happens.
-2. **Read the map.** Each dot is a track and the number next to it is its id.
-   The circle around it is its uncertainty (1σ) and the line shows where it will
-   be in 30 s. Blue tracks are confirmed; amber, dashed ones are *coasting*: no
-   recent measurements, so the position is predicted. Hover or click a track for
-   details, or open the **Tracks** tab for the full list.
-3. **Change the conditions.** Choose another scenario, a playback speed, a
-   network condition (perfect, lossy, lossy with an outage) and a sensor fault,
-   then press **Run scenario**.
-4. **Replay and verify.** When a run ends, press **Replay on map** to watch it
-   again from its recording, or **Verify replay** to check that replaying it
-   produces exactly the same output. Older runs are in the **Recordings** tab.
-5. **Live aircraft (optional).** Open *Live aircraft (ADS-B)* under the run
-   options, choose an area (or press *Use map area*) and press *Start live
-   feed*. Without an OpenSky account the free quota allows an update only every
-   few minutes; with one, set `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET`
-   in the environment before starting Sifted for one about every 20 seconds.
+Performance figures were measured on a 2 vCPU virtualised Intel Xeon with 8 GB
+of memory, using GCC 13.3 and the `release` preset. Engine timings use a seeded
+synthetic workload with 5 runs per configuration (3 without the gate screen). The
+end-to-end figures are one run of 30 scans per row. Other work was running on the
+second vCPU during part of the runs, and absolute numbers are machine-specific.
+The [benchmark report](docs/benchmarks.md) has the method, the raw CSVs and the
+commands to reproduce them.
 
 <p align="center">
-  <img src="docs/images/tracks.png" alt="The Tracks tab: a table of confirmed tracks with uncertainty, speed and contributing sensors, and a track's details on the map" width="440">
-  <img src="docs/images/recordings.png" alt="The Recordings tab: a recorded run verified as bit-for-bit identical on replay" width="440">
+  <img src="docs/benchmarks/scan_latency.png" alt="Log-log plot of p99 scan processing time against live tracks, with and without the gate screen, at three clutter levels, with the 100 ms budget marked" width="560">
 </p>
 
-Useful launcher options: `./sifted --check` checks the installation,
-`--browser` opens a normal browser tab instead of an app window,
-`--no-browser` doesn't open anything, `--port N` picks the web port (Sifted
-picks the next free port automatically if one is taken), `--run demo` starts a
-scenario immediately. `./sifted --help` lists them all.
+## Design decisions and tradeoffs
 
-## System requirements
+- **Single-threaded deterministic engine ([ADR 0002](docs/adr/0002-deterministic-single-threaded-engine.md)).**
+  Replay equality becomes a byte comparison and races are confined to the
+  handoff points. Throughput per engine is bounded by one core.
+- **Global nearest neighbour, not JPDA or MHT ([ADR 0004](docs/adr/0004-association-and-lifecycle.md)).**
+  Decisions are deterministic and explainable from a per-track trace. JPDA and
+  MHT do better in dense clutter, at much higher complexity.
+- **Record the engine thread's input ([ADR 0005](docs/adr/0005-event-log.md)).**
+  Replay recomputes everything downstream of the log instead of trusting stored
+  results. Every parameter that changes output must be in the log header.
+- **Bounded reorder window, not retrodiction ([ADR 0009](docs/adr/0009-out-of-order-policy.md)).**
+  Tracks keep no state history and association is never revisited. The cost is
+  added latency, and data later than the window is dropped and counted.
+- **Minimal read-only WebSocket server ([ADR 0006](docs/adr/0006-networking.md)).**
+  No networking dependency and a small parser that can be fuzzed. There is no TLS
+  or authentication.
+- **Opt-in clock gate ([ADR 0010](docs/adr/0010-fault-handling.md)).**
+  It stops a sensor with a fast clock from invalidating other sensors' data, but
+  it needs senders and receiver on a common timebase, so it is off by default.
 
-| | Minimum |
-|---|---|
-| Windows | Windows 10 version 2004 (build 19041) or Windows 11, with WSL (WSL 2 recommended) |
-| macOS | macOS 13 or newer with Homebrew (Apple Silicon or Intel) |
-| Linux | any recent distribution with apt, dnf, pacman or zypper (or the tools above installed by hand) |
-| Hardware | 2 CPU cores, 2 GB RAM, ~1 GB disk for the build tools and build |
-| Browser | a current Chrome, Edge, Firefox or Safari |
-| Internet | for the install, map background tiles (OpenStreetMap) and live ADS-B; scenarios, tracking and replay work offline |
+## Known limitations
 
-**Platform status.** The installer, launcher and operator view have been tested
-end to end on Ubuntu 24.04 (GCC 13 and Clang 18). The Windows installer has been
-exercised against a simulated WSL, and the macOS path has not yet been run on a
-Mac. Reports from either are welcome.
+- **Bit-equality holds only for the same binary and architecture.** Identical
+  results across compilers or maths libraries are not promised, because
+  transcendental functions such as `sin` and `atan2` can differ
+  ([design §3](docs/design.md#3-determinism-contract)).
+- **No sensor bias registration.** A 50 m radar range bias shifts the picture by
+  about 50 m, and fusing it with an unbiased camera caused 1-6 ID switches
+  ([threat model](docs/threat-model.md#sensor-and-input-faults)).
+- **The gate screen is still all-pairs.** Cost grows with measurements × tracks.
+  A spatial index for more than about 3,000 tracks per thread is deferred
+  ([design §10-11](docs/design.md#11-open-questions-final-status)).
+- **The filter is pessimistic in straight flight.** NEES is about half its
+  expected value because the process noise budgets for manoeuvres. An honest
+  straight-flight covariance needs an IMM
+  ([design §7](docs/design.md#filter-consistency)).
+- **Frozen sensors are not detected.** A stuck radar produces stationary false
+  tracks until it recovers
+  ([threat model](docs/threat-model.md#sensor-and-input-faults)).
+- **The macOS install path has not been run on a real Mac**, and the Windows
+  installer has been exercised against a simulated WSL
+  ([platform status](docs/install.md#system-requirements)).
 
-## Troubleshooting
+## Quick start
 
-**The installer stopped with an error.** It prints the reason and the last
-lines of its log; the full log is `build/install.log`. Fix the cause and run it
-again. It picks up where it left off.
+Clone or download this repository, then run the installer from its folder. The
+installer fetches what is missing, builds Sifted and runs an end-to-end smoke
+test. Per-platform detail is in the [install guide](docs/install.md).
 
-**Windows: `install.cmd` closes immediately or says scripts are disabled.**
-Run it from a Command Prompt (`cd` to the folder, then `install.cmd`) to see
-the message. It runs PowerShell with `-ExecutionPolicy Bypass` for that one
-script only.
+| Platform | Install | Run |
+|---|---|---|
+| Linux | `./install.sh` | `./sifted` |
+| macOS (with [Homebrew](https://brew.sh)) | `./install.sh` | `./sifted` |
+| Windows 10 / 11 (uses WSL) | double-click `install.cmd` | the **Sifted** shortcut, or `sifted.cmd` |
 
-**Windows: "WSL is not installed" every time.** WSL needs virtualization
-enabled in your PC's firmware (BIOS/UEFI) and a restart after it's installed.
-Run `wsl --status` in PowerShell to see what's missing.
+Sifted offers a guided demo when it first opens: five aircraft, one radar and one
+camera, with a side panel that explains what to watch. Choose a network condition
+or sensor fault for a run, then press **Verify replay** when it ends.
 
-**Windows: the Sifted shortcut shows an error, or nothing opens.** The message
-box says why; the full log is `build\launcher.log`. For every detail, open a
-Command Prompt, `cd` to the Sifted folder and run `sifted.cmd`: its window stays
-open and shows the error. If the installer's last message
-asked you to restart, do that, open **Ubuntu** from the Start menu once, then
-run `install.cmd` again: the shortcut only works after that second run.
+### For engineers
 
-**Windows: errors mentioning `$'\r'`.** The shell scripts were checked out with
-Windows line endings. The installer fixes them; if you run scripts by hand,
-re-clone after `git config --global core.autocrlf input`.
+Build and test (Debug, warnings as errors). The other presets are `release`,
+`asan`, `tsan` and `fuzz`:
 
-**Windows: the browser can't reach `127.0.0.1:8000`.** WSL forwards
-`localhost` to Windows by default. If you've turned that off
-(`localhostForwarding=false` in `%UserProfile%\.wslconfig`), turn it back on
-and run `wsl --shutdown`.
-
-**macOS: "No suitable C++ compiler".** Apple's compiler can be too old for some
-C++20 library features Sifted uses. Run `brew install gcc` and `./install.sh`
-again; it finds Homebrew's GCC automatically.
-
-**macOS: "Sifted.command can't be opened".** Right-click it, choose **Open**,
-then **Open** again. You only need to do this once.
-
-**"Address already in use".** Another program (or another copy of Sifted) is
-using a port. Sifted picks free ports at start-up; if a conflict appears later,
-quit the other program or restart Sifted. `./sifted --check` shows which ports
-are free.
-
-**The map is grey but tracks still show.** Map tiles come from OpenStreetMap
-over the internet. Tracking doesn't need them. Check your connection or proxy.
-
-**Live aircraft never appear.** Anonymous OpenSky access allows one update every
-few minutes, and the activity log (bottom of the side panel) shows any network
-errors. Try a busier area, or use OpenSky API credentials.
-
-**"The fusion service is not built yet".** Run the installer. If you moved the
-folder after installing, run it again; it rebuilds quickly.
-
-**Starting over.** Delete the `build` folder and run the installer again.
-Recordings live in the data folder listed above; delete it to remove them.
-
-## How it works
-
-```
- Simulated radar   --\
- Simulated camera  ---+--UDP-->  ingest + validate --> associate --> estimate --> track store --WebSocket--> operator map
- ADS-B (OpenSky)   --/                  |                                                |
-                                        v                                                v
-                                   event log  <------------- replay (simulated clock) ---+
+```bash
+cmake --preset dev && cmake --build --preset dev && ctest --preset dev
 ```
 
-The **fusion service** (`sifted_fusiond`, C++20) receives sensor measurements
-over UDP and publishes track snapshots over WebSocket. Every message crosses a
-validated boundary: explicit versioning, size limits and strict parsing on
-everything received. The engine is single-threaded and deterministic: time is
-an input, not read from the machine, so a recording replays bit-for-bit.
-Network receive and WebSocket publication run on their own threads with
-documented ownership of shared state, checked with ThreadSanitizer.
+Record a live run, replay it and compare the outputs:
 
-The **simulators** (`sim/`, Python) generate radar and camera measurements for
-named, seeded scenarios, inject network impairments and sensor faults, and
-adapt the OpenSky ADS-B feed. The **launcher** (`app/launcher.py`) runs all of
-these on demand behind the **operator view** (`web/`), and only ever listens on
-`127.0.0.1`.
+```bash
+cd sim && python3 -m sifted_sim.generate crossing_pair /tmp/crossing && cd ..
+build/dev/src/apps/sifted_fusiond --sensors /tmp/crossing/sensors.cfg \
+    --record /tmp/crossing.siftlog --output /tmp/live.txt
+```
 
-| Area | Choice |
+```bash
+# In a second terminal. When it finishes, press Ctrl-C in the first terminal.
+cd sim && python3 -m sifted_sim.send crossing_pair --speed 5
+```
+
+```bash
+build/dev/src/apps/sifted_fusiond --replay /tmp/crossing.siftlog --output /tmp/replay.txt --ws-port 0
+cmp /tmp/live.txt /tmp/replay.txt && echo identical
+```
+
+Regenerate the ground-truth scorecard:
+
+```bash
+cmake --preset release && cmake --build --preset release
+build/release/eval/sifted_eval --out docs/evaluation.md
+```
+
+The [development guide](docs/development.md) covers dependencies, fuzzing,
+benchmarks, running each component by hand and the launcher's control API.
+
+### Troubleshooting
+
+See [troubleshooting in the install guide](docs/install.md#troubleshooting).
+
+## Repository map
+
+| Path | Contents |
 |---|---|
-| Core | C++20, CMake |
-| Math | Eigen (Kalman filters), Mahalanobis gating, global nearest neighbour (Hungarian) |
-| Networking | UDP for sensor data, a minimal read-only WebSocket server, POSIX sockets ([ADR 0006](docs/adr/0006-networking.md)) |
-| Message format | a small custom framing layer, versioned and size-limited ([ADR 0001](docs/adr/0001-wire-format.md)) |
-| Record and replay | append-only timestamped event log, simulated clock |
-| Simulators, launcher | Python, standard library only |
-| Operator view | HTML, CSS and JavaScript with Leaflet (bundled) and OpenStreetMap tiles; no build step |
-| Testing | GoogleTest, ground-truth scenario regression, Python `unittest` |
-| Quality | libFuzzer, ASan, UBSan, TSan, clang-tidy, GitHub Actions CI |
-
-More: the [design document](docs/design.md), the [threat model](docs/threat-model.md),
-the [architecture decision records](docs/adr/), the
-[evaluation scorecard](docs/evaluation.md), the [benchmarks](docs/benchmarks.md)
-and the [demo runbook](docs/demo.md).
-
-## For developers
-
-Building with the CMake presets, the sanitizer and fuzzing builds, running each
-component by hand, the launcher's control API and the source layout are in the
-[development guide](docs/development.md).
+| [`src/sifted/`](src/sifted) | Core and network libraries: wire codec, estimation, association, track store, replay, ingest |
+| [`src/apps/`](src/apps) | `sifted_fusiond`, the fusion daemon (live and replay) |
+| [`tests/`](tests) | Unit, ground-truth regression, degraded-network, fault-injection and UDP flood tests |
+| [`eval/`](eval) | Shared ground-truth scoring library and the `sifted_eval` scorecard tool |
+| [`fuzz/`](fuzz) | Six libFuzzer targets and their seed corpora |
+| [`benchmarks/`](benchmarks) | Engine benchmark harness, end-to-end latency script, report generator |
+| [`sim/`](sim) | Python sensor simulators, scenarios, fault injection, impairment proxy, OpenSky adapter |
+| [`app/`](app) | Python launcher and local control API |
+| [`web/`](web) | Operator view: HTML, CSS and JavaScript with Leaflet bundled, no build step |
+| [`docs/`](docs) | [Design](docs/design.md), [ADRs](docs/adr/), [threat model](docs/threat-model.md), [benchmarks](docs/benchmarks.md), [scorecard](docs/evaluation.md), [demo runbook](docs/demo.md) |
+| [`scripts/`](scripts), [`cmake/`](cmake) | Demo runner and Windows installer scripts; build options, sanitizers and dependencies |
 
 ## Scope and ground rules
 

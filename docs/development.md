@@ -1,7 +1,7 @@
 # Development guide
 
 Everything below is for working on Sifted itself. To install and use it, see
-the [README](../README.md).
+the [install guide](install.md).
 
 ## Building from source
 

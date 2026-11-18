@@ -20,4 +20,4 @@ an origin, geodetic measurements are rejected as `UnsupportedKind`.
 ## Consequences
 + Replay projects exactly as the live run did.
 - The operator must choose an origin inside the area of interest; documented
-  in the README's ADS-B section.
+  in the ADS-B section of docs/development.md.
