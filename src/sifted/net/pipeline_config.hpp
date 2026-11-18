@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 #include "sifted/core/engine.hpp"
 
@@ -43,6 +44,27 @@ struct PipelineConfig {
   // other sensor's data OutOfOrder). Needs sensors and receiver on a common
   // timebase (wall-clock senders, or simulation), so 0 disables it.
   double max_time_ahead_s = 0.0;
+  // Timeline guard (ADR 0012). Needs no common timebase: a frame is judged
+  // against the measurement times already accepted. It is on the current
+  // timeline if it is at most max_time_jump_s behind the newest accepted time,
+  // or ahead of it by at most max_time_jump_s plus the receive time elapsed
+  // since. Anything else is quarantined and reaches nothing downstream. A
+  // quarantined timeline replaces the current one only after
+  // timeline_confirm_frames distinct, mutually consistent frames AND
+  // timeline_confirm_s of receive time in which the current timeline received
+  // no frame. 0 disables the guard (the behaviour of older recordings); the
+  // daemon defaults both durations to coast_after_s: a jump that small cannot
+  // even make a track coast.
+  double max_time_jump_s = 0.0;
+  std::uint32_t timeline_confirm_frames = 3;
+  double timeline_confirm_s = 2.5;
+  // Feed staleness (ADR 0012). A sensor is stale when nothing has been
+  // accepted from it for max(feed_stale_min_s, feed_stale_factor x the median
+  // of its last five inter-scan receive gaps), so the threshold follows each
+  // sensor's own cadence. 0 disables the feature and leaves snapshots exactly
+  // as older recordings have them. Display only: it never changes tracking.
+  double feed_stale_factor = 0.0;
+  double feed_stale_min_s = 2.5;
 
   friend bool operator==(const PipelineConfig&, const PipelineConfig&) = default;
 };

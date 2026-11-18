@@ -17,6 +17,9 @@ const params = new URLSearchParams(location.search);
 const SNAPSHOT_VERSION = 2;
 const LEADER_S = 30;
 const TRACE_KEEP = 64;     // decisions remembered per track in this page
+// The daemon repeats its latest snapshot every second while it has nothing new, so this
+// long without any message means the service itself is hung, whatever the sensors do.
+const WATCHDOG_MS = 5000;
 const GATE_CLOSE = 0.75;   // d² / gate from which a measurement is flagged as close to the gate
 const TRACE_ROUTINE = new Set(["associated", "competed", "near miss"]);  // per-measurement decisions
 const COLORS = { confirmed: "#3ea6ff", coasting: "#f0b429", tentative: "#8b98a8" };
@@ -35,7 +38,10 @@ const ui = {
   speed: Number(store.get("sifted.speed")) || 1,
   wsUrl: params.get("ws") || `ws://${location.hostname || "localhost"}:8765/`,
   wsOpen: false,
-  lastSnapshotAt: 0,
+  lastSnapshotAt: 0,   // when the newest distinct snapshot arrived
+  lastMessageAt: 0,    // when anything last arrived, repeats included
+  lastRaw: null,
+  shown: null,         // the newest snapshot's {feed, time_ns}
   tracksSeen: 0,
   selected: null,
 };
@@ -232,15 +238,18 @@ $("whyClose").onclick = () => selectTrack(null, false);
 
 function render(snap) {
   if (snap.type !== "sifted.tracks" || snap.version !== SNAPSHOT_VERSION || !Array.isArray(snap.tracks)) {
+    ui.shown = null;
     setConn("unsupported data", "err");
     return;
   }
   ui.lastSnapshotAt = Date.now();
   if (!snap.origin) {
+    ui.shown = null;
     setConn("no map origin", "warn");
     return;
   }
-  setConn(`live · t = ${(snap.time_ns / 1e9).toFixed(1)} s`, "ok");
+  ui.shown = { feed: snap.feed || null, time_ns: snap.time_ns };
+  refreshFreshness();
   const showTentative = $("showTentative").checked;
   const seen = new Set();
   const rows = [];
@@ -543,6 +552,50 @@ function setConn(text, kind) {
   $("conn").querySelector(".dot").className = `dot ${kind || ""}`;
 }
 
+// How far the picture can be trusted right now. Three different things can be wrong:
+// sensors are silent (the daemon says so), or the daemon itself is not answering
+// (only this page can tell, because a hung daemon cannot report that it is hung).
+function plainSensorName(id) { return (ui.sensorNames && ui.sensorNames[id]) || `Sensor ${id}`; }
+function fmtSilence(ms) { return fmtAgo(ms * 1e6); }
+
+function freshness() {
+  const now = Date.now();
+  if (ui.wsOpen && ui.lastMessageAt && now - ui.lastMessageAt > WATCHDOG_MS) {
+    return { text: "service not responding", kind: "err", stale: true,
+      banner: `The fusion service has not responded for ${fmtSilence(now - ui.lastMessageAt)}. The picture is out of date.` };
+  }
+  if (!ui.shown) return null;
+  const a = (ui.status && ui.status.activity) || {};
+  const replaying = ui.api && ui.status && ui.status.state === "replaying";
+  const mode = a.replay_done ? "replay finished" : replaying ? "replay" : "live";
+  const at = `t = ${(ui.shown.time_ns / 1e9).toFixed(1)} s`;
+  const feed = ui.shown.feed;
+  if (feed && feed.state === "stale") {
+    // Recorded ages are shown as recorded; a replay's pace is not the run's.
+    const age = (feed.age_ms || 0) + (replaying || a.replay_done ? 0 : now - ui.lastSnapshotAt);
+    return { text: `no sensor data · ${fmtSilence(age)}`, kind: "warn", stale: true,
+      banner: `No sensor data for ${fmtSilence(age)}. Tracks are predictions from the last measurements and drop out if nothing arrives.` };
+  }
+  if (feed && feed.state === "degraded") {
+    const silent = feed.sensors.filter(s => s.state === "stale").map(s => plainSensorName(s.id)).join(", ");
+    return { text: `degraded · ${silent} silent`, kind: "warn", stale: false,
+      banner: `No recent data from ${silent}. Tracks rely on the remaining sensors.` };
+  }
+  return { text: `${mode} · ${at}`, kind: "ok", stale: false, banner: "" };
+}
+
+function refreshFreshness() {
+  const f = freshness();
+  if (f) setConn(f.text, f.kind);
+  const banner = f ? f.banner : "";
+  $("feedBanner").hidden = !banner;
+  $("feedBanner").textContent = banner;
+  $("feedBanner").className = `feed-banner ${f ? f.kind : ""}`;
+  document.body.classList.toggle("stale", layers.size > 0 &&
+    (!!(f && f.stale) || (ui.api && !wantStream()) || (!ui.wsOpen && wantStream())));
+}
+setInterval(refreshFreshness, 1000);
+
 const STREAM_STATES = ["starting", "running", "finished", "replaying", "live"];
 function wantStream() { return !ui.api || STREAM_STATES.includes(ui.status && ui.status.state); }
 
@@ -550,13 +603,22 @@ let retry = 500, ws = null, wsTimer = null;
 function connect() {
   clearTimeout(wsTimer);
   try { ws = new WebSocket(ui.wsUrl); } catch (e) { scheduleReconnect(); return; }
-  ws.onopen = () => { retry = 500; ui.wsOpen = true; setConn("connected · waiting", "ok"); updateOverlay(); };
+  ws.onopen = () => {
+    retry = 500; ui.wsOpen = true; ui.lastRaw = null; ui.lastMessageAt = 0; ui.shown = null;
+    setConn("connected · waiting", "ok"); refreshFreshness(); updateOverlay();
+  };
   ws.onmessage = ev => {
+    ui.lastMessageAt = Date.now();
+    if (ev.data === ui.lastRaw) { refreshFreshness(); return; }  // the daemon's heartbeat
+    ui.lastRaw = ev.data;
     try { render(JSON.parse(ev.data)); } catch (err) { setConn("bad message", "err"); console.error(err); }
   };
   ws.onclose = () => {
     const was = ui.wsOpen;
     ui.wsOpen = false;
+    ui.lastMessageAt = 0;
+    ui.shown = null;
+    refreshFreshness();
     setConn(wantStream() ? "reconnecting…" : "idle", wantStream() ? "warn" : "");
     if (was) updateOverlay();
     scheduleReconnect();
@@ -781,11 +843,14 @@ function applyStatus(st) {
   if (st.error && (!prev || prev.error !== st.error)) toast(st.error, "err");
   if (prev && st.verify && st.verify.state && st.verify.state !== (prev.verify || {}).state) {
     if (st.verify.state === "identical") toast("Verified: the replay is bit-for-bit identical to the live run.", "ok");
+    else if (st.verify.state === "partial") toast("This run ended abnormally: everything it saved matches the replay.", "ok");
     else if (st.verify.state === "different") toast("The replay differs from the live run.", "err");
     else if (st.verify.state === "error") toast(`Verify failed: ${st.verify.message}`, "err");
   }
   if (prev && a.replay_done && !(prev.activity || {}).replay_done && a.identical != null) {
-    toast(a.identical ? "Replay finished: identical to the live run." : "Replay finished, but it differs from the live run.", a.identical ? "ok" : "err");
+    toast(!a.identical ? "Replay finished, but it differs from the live run."
+      : a.partial ? "Replay finished: it matches what the interrupted run saved."
+      : "Replay finished: identical to the live run.", a.identical ? "ok" : "err");
   }
 
   if (a.scenario !== ui.sensorScenario) { ui.sensorScenario = a.scenario; updateSensorNames(a); }
@@ -793,7 +858,7 @@ function applyStatus(st) {
   renderLog(st.log || []);
   if (st.seq !== ui.lastSeq) { ui.lastSeq = st.seq; refreshRuns(); }
   if (!ui.wsOpen && !wantStream()) setConn("idle", "");
-  document.body.classList.toggle("stale", ui.api && !wantStream() && layers.size > 0);
+  refreshFreshness();
   updateOverlay();
 }
 
@@ -820,7 +885,9 @@ function renderActive(st) {
   if (a.network) chips.push(`<span class="badge ${a.network === "perfect" ? "" : "warn"}">${esc(NET_TITLE[a.network] || a.network)}</span>`);
   if (a.fault && a.fault !== "none") chips.push(`<span class="badge warn">${esc(FAULT_TITLE[a.fault] || a.fault)}</span>`);
   if (state === "replaying") chips.push(`<span class="badge">From Recording</span>`);
-  if (a.replay_done && a.identical != null) chips.push(`<span class="badge ${a.identical ? "ok" : "err"}">${a.identical ? "✓ Identical to Live Run" : "✗ Differs from Live Run"}</span>`);
+  if (a.crashed) chips.push(`<span class="badge err">Service Crashed</span>`);
+  if (a.log_failed) chips.push(`<span class="badge err">Recording Stopped</span>`);
+  if (a.replay_done && a.identical != null) chips.push(`<span class="badge ${a.identical ? "ok" : "err"}">${a.identical ? (a.partial ? "✓ Matches What Was Saved" : "✓ Identical to Live Run") : "✗ Differs from Live Run"}</span>`);
   $("nowChips").innerHTML = chips.join("");
   const done = state === "complete" || (state === "replaying" && a.replay_done);
   const canReplay = (state === "finished" || done) && a.id && a.scenario !== "adsb";
@@ -837,7 +904,8 @@ function renderActive(st) {
   const s = st.stats || {};
   const cells = [
     ["Frames Received", s.received ?? s.frames], ["Measurements", s.measurements], ["Live Tracks", s.live_tracks],
-    ["Duplicates Dropped", s.duplicates], ["Out of Order", s.out_of_order], ["Rejected", s.rejected != null ? s.rejected + (s.oversize || 0) : null],
+    ["Duplicates Dropped", s.duplicates], ["Out of Order", s.out_of_order],
+    ["Rejected", s.rejected != null ? s.rejected + (s.oversize || 0) + (s.timeline_rejected || 0) : null],
   ];
   $("statsGrid").innerHTML = cells.map(([k, v]) => `<div class="stat"><b>${fmtNum(v)}</b><span>${esc(k)}</span></div>`).join("");
   const v = st.verify || {};
@@ -847,8 +915,9 @@ function renderActive(st) {
 }
 
 function renderVerify(el, v) {
-  el.className = "verify-result " + (v.state === "identical" ? "ok" : v.state === "running" ? "" : "err");
+  el.className = "verify-result " + (v.state === "identical" ? "ok" : v.state === "partial" ? "warn" : v.state === "running" ? "" : "err");
   el.textContent = v.state === "running" ? "Replaying the recording and comparing outputs…"
+    : v.state === "partial" ? `This run ended abnormally, so it cannot be verified in full. The ${fmtNum(v.lines)} output lines it saved match the replay of its recording${v.truncated ? ", which ends in a record cut off by the crash" : ""}.`
     : v.state === "identical" ? `✓ Bit-for-bit identical: ${fmtNum(v.lines)} output lines replayed in ${v.seconds < 0.1 ? "under 0.1" : v.seconds} s.`
     : v.state === "different" ? "✗ The replay's output differs from the live run."
     : `Verify failed: ${v.message}`;
@@ -878,7 +947,8 @@ async function refreshRuns() {
     if (r.network) chips.push(`<span class="badge ${r.network === "perfect" ? "" : "warn"}">${esc(NET_TITLE[r.network] || r.network)}</span>`);
     if (r.fault && r.fault !== "none") chips.push(`<span class="badge warn">${esc(FAULT_TITLE[r.fault] || r.fault)}</span>`);
     if (r.scenario === "adsb") chips.push(`<span class="badge">ADS-B</span>`);
-    if (!r.complete) chips.push(`<span class="badge">${r.id === cur ? "In Progress" : "Incomplete"}</span>`);
+    if (r.crashed) chips.push(`<span class="badge err">Crashed</span>`);
+    else if (!r.complete) chips.push(`<span class="badge">${r.id === cur ? "In Progress" : "Incomplete"}</span>`);
     chips.push(`<span class="badge">${fmtNum(r.size_kb)} KB</span>`);
     const vr = v.id === r.id && v.state ? `<div class="verify-result" data-v="${esc(r.id)}"></div>` : "";
     return `<div class="run${r.id === cur ? " cur" : ""}"><div class="run-top"><span class="run-title">${esc(r.title || r.scenario)}</span>` +

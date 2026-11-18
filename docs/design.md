@@ -1,7 +1,7 @@
 # Sifted design
 
 > Status: complete through M3. Decisions are recorded in [`adr/`](adr/)
-> (0001-0011). Measured numbers come from the tests and benchmarks named next
+> (0001-0012). Measured numbers come from the tests and benchmarks named next
 > to them; all were run with GCC 13 against Eigen 3.4.0 and GoogleTest 1.14.
 
 ## 1. Goals and non-goals
@@ -18,7 +18,7 @@ sensors --UDP--> [rx thread: size check -> per-source rate limit -> strict decod
                        |  bounded queue (drop + count when full)
                        v
           [engine thread: net::Pipeline]
-             decode -> dedup (seq, time) -> clock gate -> reorder stage -> scan assembly
+             decode -> timeline guard -> dedup (seq, time) -> clock gate -> reorder stage -> scan assembly
              -> Engine (associate -> estimate -> store) -> output lines, snapshots
                        |                                        |
                        +--> event log (every frame and tick,    +--> WebSocket thread --> operator map
@@ -33,11 +33,14 @@ the live UDP flood tests with a concurrent consumer):
 | UDP receive (`UdpReceiver::run`) | its socket, the rate limiter table | pushes into `BoundedQueue` (mutex); increments atomic `UdpStats` |
 | engine (daemon main thread) | `Pipeline`, `Engine`, event log writer, output file | pops the queue; calls `WebSocketServer::publish` (swaps a shared pointer under a mutex) |
 | WebSocket server | all client sockets | reads the latest snapshot pointer under the mutex; atomic stats |
+| recording sync (`DurableFile`, only with `--record`) | nothing | calls `fdatasync` on the log's descriptor about once a second, so a slow disk never stalls the engine thread |
 
 The engine thread is the only one that touches tracker state. The receive
 thread reads the wall clock (receive stamps) and the engine thread reads it
-only to stamp quiet ticks; both values go into the event log, so replay never
-reads a clock.
+only to stamp ticks; both values go into the event log, so replay never reads a
+clock. The engine thread also repeats the latest snapshot once a second while
+idle. That heartbeat is not recorded and is not part of the output: it changes
+only what a connected client knows about the daemon being alive.
 
 ## 3. Determinism contract
 
@@ -57,7 +60,10 @@ Rules (enforced by review, build flags and tests):
    event log header (ADR 0005). Impairments, faults and benchmark workloads
    are seeded (SplitMix64) and reproducible; the impairment model is
    bit-identical between C++ and Python (golden fixture).
-7. (M3) Performance shortcuts must not change results: the gate screen is
+7. Idle time reaches the pipeline only as recorded ticks. Ticks can change what
+   is displayed, never what is tracked: predicted snapshots use a read-only view
+   of the lifecycle (ADR 0012, `Silence.IdleTicksNeverChangeWhatIsTracked`).
+8. (M3) Performance shortcuts must not change results: the gate screen is
    proven conservative and checked by tests and by the engine fuzzer against
    an engine without it.
 
@@ -221,6 +227,12 @@ header) unless marked.
 | `reorder_window_s` | 0 (library), **0.5 s (daemon)** | ADR 0009, section 9 |
 | `reorder_capacity` | 4096 frames | bounded |
 | `max_time_ahead_s` | 0 (off) | ADR 0010; needs a common timebase; set ≤ the reorder window |
+| `max_time_jump_s` | 0 (library), **`coast_after_s` (daemon)** | ADR 0012: a jump that small cannot even make a track coast |
+| `timeline_confirm_frames` | 3 | ADR 0012: distinct frames needed to adopt a new timeline |
+| `timeline_confirm_s` | 2.5 s (library), **`coast_after_s` (daemon)** | ADR 0012: silence on the old timeline before it can be replaced |
+| `feed_stale_factor` | 0 (library), **3 (daemon)** | ADR 0012: tolerates two missed scans of a sensor's own median cadence |
+| `feed_stale_min_s` | 2.5 s (library), **`coast_after_s` (daemon)** | ADR 0012: never call a sensor stale before its tracks would coast |
+| idle tick, recording flush and sync (daemon only, not recorded) | 1 s; 100 ms / 64 records; 1 s | ADR 0012; ticks are themselves recorded, and the rest cannot change output |
 | `gate_screen` (not recorded) | on | never changes results (section 10) |
 | rate limit (daemon only, not recorded) | 20 000/s, burst 4 096, 1 024 sources | ADR 0010; drops never reach the engine or the log |
 
@@ -267,9 +279,12 @@ keeps only the measurements that drove a decision.
 **Scoring.** As in the M2 regression (CLEAR-MOT style; `eval/sifted/eval/scenario.hpp`),
 but frames go through `net::Pipeline` exactly as the daemon consumes them
 (arrival order, receive time = arrival, a quiet tick after 100 ms), and each
-truth instant is scored on what the operator would see at that moment. Even a
-clean network therefore scores slightly worse than the direct engine feed:
-the radar scan stamped T is still being assembled at T.
+truth instant is scored on the tracks the pipeline holds at that moment,
+extrapolated to it. That is the tracker's estimate, not the last message an
+operator received: snapshots are published at most every 0.5 s and, in a silent
+stretch, only once the feed is declared stale (section 9, "Silence"). Even a
+clean network scores slightly worse than the direct engine feed: the radar scan
+stamped T is still being assembled at T.
 
 **Out-of-order policy (ADR 0009).** Sweep over crossing_pair, close_pass and
 enter_leave, three impairment seeds each (9 runs per row; ID switches of
@@ -336,6 +351,32 @@ re-initiated; recovery within 5 s (+ window) either way. The demo scenario
 (8 s outage at the moderate level) recovers in 4 s with all five targets
 tracked (`DegradedNetwork.DemoScenarioAsInTheRunbook`).
 
+**Timeline integrity (ADR 0012).** The daemon quarantines frames that are more
+than `max_time_jump_s` off the current timeline, beyond the receive time elapsed.
+One forged frame is rejected and counted. A real change of timeline (a sensor
+restarting on a new epoch, every sensor moving forward) is adopted after 3 distinct
+frames and `timeline_confirm_s` of silence on the old timeline, without losing the
+held frames. Gaps covered by elapsed receive time pass unquestioned: 15 s outages at
+real time and ADS-B polls 22-216 s apart. A sender running faster than real time
+across a gap (`--speed 0` over a 15 s hole) pauses for the confirmation time.
+
+**Silence (ADR 0012).** A sensor is stale after `max(feed_stale_min_s,
+feed_stale_factor x its median inter-scan gap)`. Every snapshot says which sensors
+are live: `live`, `degraded` (some silent), `stale` (all silent). During total
+silence, recorded idle ticks publish predicted snapshots at most once a second, in
+which confirmed tracks are shown coasting after `coast_after_s` and disappear after
+`drop_after_s`. The tracker itself is not touched: when data returns, the engine's
+lifecycle decides exactly as it would have, so the outage results in
+[evaluation.md](evaluation.md) are unchanged. Ticks stop once the picture is empty.
+The operator view adds its own watchdog for a hung service (5 s without any message,
+when the daemon's heartbeat is one per second).
+
+**Crash durability (ADR 0012).** Process death loses at most the newest 64 records
+or about 200 ms of input; power loss about 1.2 s. A torn final record is recoverable
+with `--recover-truncated`; other damage remains a hard error. A crashed run cannot
+be verified in full, so Verify compares what the run and its recording both saved
+and says "partial".
+
 ## 10. Performance
 
 Full report: [`benchmarks.md`](benchmarks.md). Summary (sandbox VM, 2 vCPU
@@ -375,7 +416,8 @@ arbitrary input. The remaining cost is the all-pairs screen itself
   measured jitter levels).
 - WebSocket library vs. minimal server: **resolved**, minimal read-only
   server, fuzzed (ADR 0006).
-- Clock faults: **resolved** with the opt-in clock gate (ADR 0010).
+- Clock faults: **resolved** with the opt-in clock gate (ADR 0010) and the default
+  timeline guard (ADR 0012).
 - Sensor bias estimation / registration, frozen-sensor detection, spatial
   indexing for >3 000 tracks per thread, CUDA association: **deferred**
   (documented limitations).

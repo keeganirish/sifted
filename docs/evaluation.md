@@ -142,7 +142,7 @@ Average NEES (4-dof full state, 2-dof position) over the RMSE's samples, split i
 ## Conditions
 
 - **direct**: the scenario's frames, decoded by the real decoder, fed to the engine scan by scan (`run_engine`). The regression tests' path.
-- **pipeline conditions** (every other row): frames sent at their measurement time through the seeded impairment model (ADR 0008), then fed to `net::Pipeline` exactly as the daemon consumes them: arrival order, receive time = arrival time, a quiet tick after 100 ms (`run_pipeline`). Truth instant T is scored on what the operator would see at T, so even a clean network scores slightly worse than the direct feed: the scan stamped T is still being assembled.
+- **pipeline conditions** (every other row): frames sent at their measurement time through the seeded impairment model (ADR 0008), then fed to `net::Pipeline` exactly as the daemon consumes them: arrival order, receive time = arrival time, a quiet tick after 100 ms (`run_pipeline`). Truth instant T is scored on the tracks the pipeline holds at T, extrapolated to T, so even a clean network scores slightly worse than the direct feed: the scan stamped T is still being assembled.
 - **clean**: no loss, delay, jitter or duplication.
 - **mild**: 1% loss, delay 20 ms + U(0, 50 ms), 1% duplicated.
 - **moderate**: 3% loss + Gilbert-Elliott bursts (good->bad 0.01, bad->good 0.25, 60% loss when bad), delay 50 ms + U(0, 400 ms), 2% duplicated.

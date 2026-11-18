@@ -99,6 +99,10 @@ ADSB_DEFAULT_BBOX = (51.0, 52.0, -1.2, 0.4)  # around London (README)
 ADSB_SENSOR_ID = 100
 ADSB_TRACKER_ARGS = ["--initial-velocity-sigma", "250", "--tentative-timeout", "90",
                      "--coast-after", "60", "--drop-after", "180", "--max-position-sigma", "10000"]
+# Until the daemon has learned the polling cadence, how long ADS-B may stay silent
+# before the picture is called stale: a few polls (about 20 s signed in, up to
+# about 216 s anonymously).
+ADSB_STALE_MIN_S = {True: 90, False: 300}
 
 MAX_RUNS_KEPT = 25
 TRUTH_CACHE_RUNS = 4  # parsed truth files kept in memory for the overlay
@@ -356,6 +360,39 @@ class Proc:
         self.reader.join(timeout=2.0)
 
 
+# --------------------------------------------------------------------------- verification
+
+def complete_lines(path: pathlib.Path) -> list[bytes]:
+    """The lines of an output file, without a final line the writer did not finish."""
+    data = path.read_bytes()
+    return data[:data.rfind(b"\n") + 1].splitlines(keepends=True)
+
+
+def compare_incomplete(live: pathlib.Path, replay: pathlib.Path, before_finish: int) -> dict:
+    """Compares a run that never shut down cleanly with the replay of its recording.
+
+    Both files stop at an arbitrary point: the crash lost whatever each still had
+    buffered. What can be checked is what both hold. The replay's own final flush
+    is left out, because the crashed run never performed one.
+    """
+    theirs, ours = complete_lines(live), complete_lines(replay)[:before_finish]
+    common = min(len(theirs), len(ours))
+    same = theirs[:common] == ours[:common]
+    return {"state": "partial" if same else "different", "lines": common,
+            "live_lines": len(theirs), "replay_lines": len(ours)}
+
+
+def recovered_lines(stderr: str) -> int | None:
+    """Output lines a --recover-truncated replay produced before its final flush."""
+    m = re.search(r"recovered replay: (\d+) output lines", stderr)
+    return int(m.group(1)) if m else None
+
+
+def ended_cleanly(meta: dict) -> bool:
+    """False for a run whose daemon died, or whose launcher died before finishing it."""
+    return bool(meta.get("complete")) and not meta.get("crashed") and not meta.get("log_failed")
+
+
 # --------------------------------------------------------------------------- session
 
 class SessionError(Exception):
@@ -408,8 +445,16 @@ class Session:
                     "sifted_fusiond: frames ")):
                 self.stats.update(parse_stats(line))
                 return  # counters go to the stats panel, not the activity log
+            if proc.name == "daemon" and "recovered replay:" in line:
+                self.activity["recovered_lines"] = recovered_lines(line)
+                return
             if proc.name == "daemon" and "replay finished" in line:
                 self._replay_done()
+            if proc.name == "daemon" and "event log write failed" in line:
+                self.error = ("The recording stopped: " + line.removeprefix("sifted_fusiond: ERROR: ") +
+                              ". Tracking continues, but this run cannot be fully replayed.")
+                self.activity["log_failed"] = True
+                self._bump()
             if proc.name == "adsb":
                 if "next attempt" in line:
                     self.error = ("Couldn't reach OpenSky (" + line.removeprefix("adsb: ") +
@@ -443,6 +488,7 @@ class Session:
         full = [str(exe), *args, "--ws-port", str(self.cfg.ws_port), "--ws-bind", HOST]
         p = Proc("daemon", full, self, cwd=ROOT, logfile=logfile)
         self.procs["daemon"] = p
+        threading.Thread(target=self._watch_daemon, args=(p,), daemon=True).start()
         deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline and not p.ready.is_set() and p.alive():
             time.sleep(0.05)
@@ -465,7 +511,32 @@ class Session:
         if self.state in ("running", "finished", "live", "stopping"):
             self._finalise_run()
 
-    def _finalise_run(self) -> None:
+    def _watch_daemon(self, daemon: Proc) -> None:
+        """Notices a daemon that dies on its own (deliberate stops remove it from procs first)."""
+        rc = daemon.popen.wait()
+        daemon.reader.join(timeout=2.0)
+        with self.lock:
+            if self.procs.get("daemon") is not daemon:
+                return
+            self.procs.pop("daemon", None)
+            if self.state not in ("running", "finished", "live"):
+                return
+            how = f"killed by signal {-rc}" if rc < 0 else f"exit code {rc}"
+            self.error = (f"The fusion service stopped unexpectedly ({how}). "
+                          "Its recording is kept up to the moment it stopped.")
+            self.note(self.error, "error")
+            for name in ("adsb", "sender", "proxy"):
+                p = self.procs.pop(name, None)
+                if p:
+                    p.stop()
+            self.activity["crashed"] = True
+            if "t0" in self.activity:
+                self.activity["elapsed_final"] = time.monotonic() - self.activity.pop("t0")
+            self._finalise_run(crashed=True)
+            self.activity["complete"] = True
+            self._bump("complete")
+
+    def _finalise_run(self, crashed: bool = False) -> None:
         run = self.activity.get("run_dir")
         if not run:
             return
@@ -479,7 +550,9 @@ class Session:
                     (time.monotonic() - self.activity["t0"]) * self.activity["speed"],
                     self.activity.get("duration_s") or float("inf")), 1)
             meta["stats"] = self.stats
-            meta["complete"] = True
+            meta["complete"] = not crashed
+            meta["crashed"] = crashed
+            meta["log_failed"] = bool(self.activity.get("log_failed"))
             meta_path.write_text(json.dumps(meta, indent=2))
         except (OSError, ValueError):
             pass
@@ -606,9 +679,10 @@ class Session:
             replay_out.unlink(missing_ok=True)
             self._bump("starting")
             self.note(f"Replaying {meta.get('title', run_id)} at {pace:g}x")
+            recover = [] if ended_cleanly(meta) else ["--recover-truncated"]
             try:
                 self._start_daemon(["--replay", str(run_dir / "run.siftlog"), "--pace",
-                                    f"{pace:g}", "--hold", "--output", str(replay_out)],
+                                    f"{pace:g}", "--hold", "--output", str(replay_out), *recover],
                                    run_dir / "replay.log")
             except SessionError as e:
                 self.error = str(e)
@@ -622,7 +696,15 @@ class Session:
         run_dir = pathlib.Path(self.activity.get("run_dir", ""))
         self.activity["replay_done"] = True
         live, rep = run_dir / "live.txt", run_dir / "replay.txt"
-        if live.is_file() and rep.is_file():
+        if live.is_file() and rep.is_file() and not ended_cleanly(self.activity):
+            r = compare_incomplete(live, rep, self.activity.get("recovered_lines") or 0)
+            same = r["state"] == "partial"
+            self.activity["identical"], self.activity["partial"] = same, True
+            self.note(f"Replay finished: this run ended abnormally; the {r['lines']} output lines "
+                      "it saved match" if same else
+                      "Replay finished, but its output differs from what the run saved",
+                      "info" if same else "error")
+        elif live.is_file() and rep.is_file():
             same = filecmp.cmp(live, rep, shallow=False)
             self.activity["identical"] = same
             self.note("Replay finished: output is bit-for-bit identical to the live run"
@@ -639,12 +721,15 @@ class Session:
                 self._complete_locked()
             self.verify = {"id": run_id, "state": "running"}
             self._bump()
+            clean = ended_cleanly(json.loads((run_dir / "meta.json").read_text()))
 
         def work() -> None:
             out = run_dir / "verify.txt"
             t0 = time.monotonic()
             r = subprocess.run([str(exe), "--replay", str(run_dir / "run.siftlog"), "--output",
-                                str(out), "--ws-port", "0"], capture_output=True, text=True)
+                                str(out), "--ws-port", "0",
+                                *([] if clean else ["--recover-truncated"])],
+                               capture_output=True, text=True)
             took = time.monotonic() - t0
             live = run_dir / "live.txt"
             with self.lock:
@@ -654,6 +739,15 @@ class Session:
                 elif not live.is_file():
                     self.verify = {"id": run_id, "state": "error",
                                    "message": "the live run wrote no output"}
+                elif not clean:
+                    v = compare_incomplete(live, out, recovered_lines(r.stderr) or 0)
+                    v.update(id=run_id, seconds=round(took, 2),
+                             truncated="recording is truncated" in r.stderr)
+                    self.verify = v
+                    self.note(f"Verified {run_id}: the run ended abnormally; "
+                              f"{v['lines']} saved output lines "
+                              f"{'match' if v['state'] == 'partial' else 'DIFFER'}",
+                              "info" if v["state"] == "partial" else "error")
                 else:
                     same = filecmp.cmp(live, out, shallow=False)
                     lines = sum(1 for _ in open(out, encoding="utf-8", errors="replace"))
@@ -698,7 +792,9 @@ class Session:
             try:
                 self._start_daemon(["--sensors", str(sensors), "--listen",
                                     f"{HOST}:{self.cfg.udp_port}", "--origin", origin,
-                                    *ADSB_TRACKER_ARGS, "--record", str(run_dir / "run.siftlog"),
+                                    *ADSB_TRACKER_ARGS,
+                                    "--stale-after-min", str(ADSB_STALE_MIN_S[authed]),
+                                    "--record", str(run_dir / "run.siftlog"),
                                     "--output", str(run_dir / "live.txt"),
                                     "--stats-interval", "2"], run_dir / "daemon.log")
                 self.procs["adsb"] = Proc(

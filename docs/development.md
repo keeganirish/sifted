@@ -114,6 +114,24 @@ The daemon holds frames for `--reorder-window` (default 0.5 s) and releases
 them in measurement-time order (ADR 0009); `--max-time-ahead S` rejects frames
 from sensors whose clocks run ahead (ADR 0010; needs wall-clock senders, e.g.
 `send.py --rebase-now`); `--rate-limit` caps datagrams per source address.
+
+The timeline guard (ADR 0012) is on by default and needs no common timebase:
+`--max-time-jump S` sets how far a frame may stray from the current timeline, and
+`--timeline-confirm-frames N` and `--timeline-confirm S` set what it takes to adopt
+a new one (`--max-time-jump 0` turns the guard off). Silence is reported from each
+sensor's own cadence: see `--stale-factor`, `--stale-after-min` and `--idle-tick`.
+
+Recordings survive a crash. `--record-flush`, `--record-flush-records` and
+`--record-sync` bound what a crash can lose. To replay a crashed run's recording:
+
+```bash
+build/dev/src/apps/sifted_fusiond --replay /tmp/crossing.siftlog --recover-truncated \
+    --output /tmp/replay.txt --ws-port 0
+```
+
+Its output will not be byte-identical to `live.txt`, which the crash also cut short.
+The launcher's **Verify** compares the part both hold and reports it as partial.
+
 The demo runbook is [`demo.md`](demo.md) (`scripts/demo.sh` runs it).
 
 ### Benchmarks

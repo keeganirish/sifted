@@ -123,32 +123,39 @@ void Engine::on_scan(std::span<const Measurement> scan, std::vector<MeasurementR
   }
 }
 
-void Engine::maintain(Timestamp t) {
+Engine::LifecycleVerdict Engine::lifecycle_at(const TrackRecord& r, Timestamp t) const {
   const association::LifecycleConfig& lc = config_.lifecycle;
   const double max_var = lc.max_position_sigma_m * lc.max_position_sigma_m;
+  const double age = seconds_between(r.last_position_time, t);
+  LifecycleVerdict v;
+  if (r.status == TrackStatus::Tentative) {
+    if (age > lc.tentative_timeout_s) {
+      v.drop = association::DropReason::TentativeTimeout;
+    }
+  } else if (age > lc.drop_after_s) {
+    v.drop = association::DropReason::Stale;
+  }
+  if (v.drop == association::DropReason::None) {
+    estimation::ConstantVelocityFilter f = r.filter;
+    if (f.predict(seconds_between(r.time, t)) != FilterStatus::Ok ||
+        !(max_position_variance(f.covariance()) <= max_var)) {
+      v.drop = association::DropReason::Uncertainty;
+    }
+  }
+  v.coast = v.drop == association::DropReason::None && r.status == TrackStatus::Confirmed &&
+            age > lc.coast_after_s;
+  return v;
+}
+
+void Engine::maintain(Timestamp t) {
   std::vector<std::pair<TrackId, association::DropReason>> drops;
   for (TrackRecord& r : store_.live()) {
-    const double age = seconds_between(r.last_position_time, t);
-    association::DropReason reason = association::DropReason::None;
-    if (r.status == TrackStatus::Tentative) {
-      if (age > lc.tentative_timeout_s) {
-        reason = association::DropReason::TentativeTimeout;
-      }
-    } else if (age > lc.drop_after_s) {
-      reason = association::DropReason::Stale;
-    }
-    if (reason == association::DropReason::None) {
-      estimation::ConstantVelocityFilter f = r.filter;
-      if (f.predict(seconds_between(r.time, t)) != FilterStatus::Ok ||
-          !(max_position_variance(f.covariance()) <= max_var)) {
-        reason = association::DropReason::Uncertainty;
-      }
-    }
-    if (reason != association::DropReason::None) {
-      drops.emplace_back(r.id, reason);
+    const LifecycleVerdict v = lifecycle_at(r, t);
+    if (v.drop != association::DropReason::None) {
+      drops.emplace_back(r.id, v.drop);
       continue;
     }
-    if (r.status == TrackStatus::Confirmed && age > lc.coast_after_s) {
+    if (v.coast) {
       r.status = TrackStatus::Coasting;
       TraceEvent e;
       e.kind = TraceEventKind::Coasting;
@@ -160,6 +167,29 @@ void Engine::maintain(Timestamp t) {
     store_.drop(id, t, reason);
     ++drop_counts_[static_cast<std::size_t>(reason)];
   }
+}
+
+bool Engine::can_accept(const Measurement& m) const noexcept {
+  if (!is_valid(m)) {
+    return false;
+  }
+  const auto index = sensors_.index_of(m.sensor_id);
+  return index && m.kind == sensors_.sensors()[*index].kind &&
+         (m.kind != SensorKind::GeoPosition || config_.origin.has_value());
+}
+
+void Engine::restart_timeline(Timestamp t) {
+  std::vector<TrackId> ids;
+  ids.reserve(store_.size());
+  for (const TrackRecord& r : store_.live()) {
+    ids.push_back(r.id);
+  }
+  for (const TrackId id : ids) {  // in id order
+    store_.drop(id, t, association::DropReason::TimelineChange);
+    ++drop_counts_[static_cast<std::size_t>(association::DropReason::TimelineChange)];
+  }
+  now_.reset();
+  std::fill(last_seq_.begin(), last_seq_.end(), std::nullopt);
 }
 
 void Engine::process_group(std::span<const Measurement> group,
@@ -593,6 +623,28 @@ std::optional<TrackEstimate> Engine::track_at(TrackId id, Timestamp t,
     e.trace.push_back(r->recent.at(i));
   }
   return e;
+}
+
+std::vector<TrackEstimate> Engine::tracks_if_silent_until(Timestamp t,
+                                                          std::size_t trace_events) const {
+  std::vector<TrackEstimate> out;
+  out.reserve(store_.size());
+  for (const TrackRecord& r : store_.live()) {
+    if (t < r.time) {
+      continue;
+    }
+    const LifecycleVerdict v = lifecycle_at(r, t);
+    if (v.drop != association::DropReason::None) {
+      continue;
+    }
+    if (auto e = track_at(r.id, t, trace_events)) {
+      if (v.coast) {
+        e->status = TrackStatus::Coasting;
+      }
+      out.push_back(std::move(*e));
+    }
+  }
+  return out;
 }
 
 std::vector<TrackEstimate> Engine::tracks_at(Timestamp t, std::size_t trace_events) const {

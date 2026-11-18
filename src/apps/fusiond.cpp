@@ -14,6 +14,7 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -30,6 +31,7 @@
 
 #include "sifted/core/sensor.hpp"
 #include "sifted/net/bounded_queue.hpp"
+#include "sifted/net/durable_file.hpp"
 #include "sifted/net/ingest.hpp"
 #include "sifted/net/system_clock.hpp"
 #include "sifted/net/udp.hpp"
@@ -45,6 +47,11 @@ using namespace sifted;
 // An arbitrary, recognisable default for simulated local-frame scenarios
 // (Royal Observatory, Greenwich). Override with --origin.
 constexpr estimation::GeoOrigin kDefaultOrigin{51.4779, -0.0015, 0.0};
+
+// How often the engine thread proves it is alive to WebSocket clients while it
+// has nothing new to publish. The operator view raises its alarm after several
+// missed beats (WATCHDOG_MS in web/assets/app.js).
+constexpr std::chrono::seconds kHeartbeat{1};
 
 volatile std::sig_atomic_t g_signal = 0;
 extern "C" void on_signal(int sig) { g_signal = sig; }
@@ -68,6 +75,21 @@ constexpr const char* kUsage =
     "                          order (ADR 0009; 0: off, M2 behaviour)  [0.5]\n"
     "  --max-time-ahead S      reject frames stamped more than S seconds after their receive\n"
     "                          time (ADR 0010; needs wall-clock senders; 0: off) [0]\n"
+    "  --max-time-jump S       quarantine frames more than S seconds off the current timeline,\n"
+    "                          beyond the receive time elapsed (ADR 0012; needs no common\n"
+    "                          timebase; 0: off)                 [the --coast-after value]\n"
+    "  --timeline-confirm-frames N  distinct frames needed to adopt a new timeline  [3]\n"
+    "  --timeline-confirm S    silence of the current timeline needed before a new one is\n"
+    "                          adopted                           [the --coast-after value]\n"
+    "  --stale-factor X        a sensor is stale after X times its median scan gap (ADR 0012;\n"
+    "                          0: no feed status in snapshots)   [3]\n"
+    "  --stale-after-min S     ... and never sooner than S seconds [the --coast-after value]\n"
+    "  --idle-tick S           while silent, update the picture every S seconds; a silent run\n"
+    "                          stops ticking once nothing can change (0: off) [1]\n"
+    "  --record-flush S        hand the recording to the OS at least every S seconds [0.1]\n"
+    "  --record-flush-records N  ... and at least every N records [64]\n"
+    "  --record-sync S         force the recording to disk every S seconds (0: leave it to\n"
+    "                          the OS)                           [1]\n"
     "  tracker parameters (defaults: docs/design.md section 6):\n"
     "  --accel-psd Q  --initial-velocity-sigma V  --gate-probability P\n"
     "  --confirm-hits N  --tentative-timeout S  --coast-after S  --drop-after S\n"
@@ -84,7 +106,9 @@ constexpr const char* kUsage =
     "\n"
     "replay options:\n"
     "  --pace X                replay at X times real time (0: as fast as possible) [0]\n"
-    "  --hold                  keep serving the last snapshot after the replay ends\n";
+    "  --hold                  keep serving the last snapshot after the replay ends\n"
+    "  --recover-truncated     replay a crashed run's recording up to its torn final record\n"
+    "                          and report what was lost (other damage is still an error)\n";
 
 struct Options {
   std::string sensors_file;
@@ -100,7 +124,12 @@ struct Options {
   double stats_interval_s = 5.0;
   double pace = 0.0;
   bool hold = false;
+  bool recover_truncated = false;
   bool tuning_given = false;
+  double idle_tick_s = 1.0;
+  double record_flush_s = 0.1;
+  std::size_t record_flush_records = 64;
+  double record_sync_s = 1.0;
   net::PipelineConfig config;
 };
 
@@ -143,6 +172,21 @@ std::string parse_args(int argc, char** argv, Options& o) {
   // The daemon faces a real network: hold frames briefly so delay jitter does
   // not become out-of-order drops (ADR 0009). The library default stays 0.
   o.config.reorder_window_s = 0.5;
+  // The daemon faces an untrusted network, and an operator: the timeline guard
+  // and the feed status are on (ADR 0012). The library defaults stay off, which
+  // is also how recordings made before them replay.
+  o.config.feed_stale_factor = 3.0;
+  std::optional<double> max_jump;
+  std::optional<double> confirm;
+  std::optional<double> stale_min;
+  auto seconds = [](std::optional<double>& out, std::optional<std::string_view> v) {
+    double d = 0.0;
+    if (!v || !parse_num(*v, d) || !std::isfinite(d) || d < 0.0) {
+      return false;
+    }
+    out = d;
+    return true;
+  };
   for (int i = 1; i < argc; ++i) {
     const std::string_view a = argv[i];
     auto value = [&]() -> std::optional<std::string_view> {
@@ -203,6 +247,29 @@ std::string parse_args(int argc, char** argv, Options& o) {
       ok = tuning(o.config.reorder_window_s);
     } else if (a == "--max-time-ahead") {
       ok = tuning(o.config.max_time_ahead_s);
+    } else if (a == "--max-time-jump") {
+      o.tuning_given = true;
+      ok = seconds(max_jump, value());
+    } else if (a == "--timeline-confirm-frames") {
+      ok = tuning(o.config.timeline_confirm_frames);
+    } else if (a == "--timeline-confirm") {
+      o.tuning_given = true;
+      ok = seconds(confirm, value());
+    } else if (a == "--stale-factor") {
+      ok = tuning(o.config.feed_stale_factor);
+    } else if (a == "--stale-after-min") {
+      o.tuning_given = true;
+      ok = seconds(stale_min, value());
+    } else if (a == "--idle-tick") {
+      ok = tuning(o.idle_tick_s) && std::isfinite(o.idle_tick_s) && o.idle_tick_s >= 0.0;
+    } else if (a == "--record-flush") {
+      ok = tuning(o.record_flush_s) && std::isfinite(o.record_flush_s) && o.record_flush_s > 0.0;
+    } else if (a == "--record-flush-records") {
+      ok = tuning(o.record_flush_records) && o.record_flush_records > 0;
+    } else if (a == "--record-sync") {
+      ok = tuning(o.record_sync_s) && std::isfinite(o.record_sync_s) && o.record_sync_s >= 0.0;
+    } else if (a == "--recover-truncated") {
+      o.recover_truncated = true;
     } else if (a == "--assignment") {
       const auto v = value();
       o.tuning_given = true;
@@ -245,8 +312,17 @@ std::string parse_args(int argc, char** argv, Options& o) {
       return "missing or invalid value for " + std::string(a);
     }
   }
+  // A jump or a gap shorter than coast_after_s cannot even make a track coast,
+  // and the value already says how long this deployment's sensors may pause.
+  const double coast = o.config.engine.lifecycle.coast_after_s;
+  o.config.max_time_jump_s = max_jump.value_or(coast);
+  o.config.timeline_confirm_s = confirm.value_or(coast);
+  o.config.feed_stale_min_s = stale_min.value_or(coast);
   if (o.replay_file.empty() == o.sensors_file.empty()) {
     return "give exactly one of --sensors (live) or --replay";
+  }
+  if (o.recover_truncated && o.replay_file.empty()) {
+    return "--recover-truncated applies to --replay";
   }
   if (!o.replay_file.empty() && (o.tuning_given || !o.record_file.empty())) {
     return "--replay takes its parameters from the log; tracker options and --record do not apply";
@@ -324,7 +400,8 @@ void print_pipeline_stats(const net::Pipeline& p) {
       stderr,
       "sifted_fusiond: frames %llu, scans %llu, duplicates %llu, measurements %llu "
       "(updated %llu, started %llu, out-of-order %llu, track-limit %llu), live tracks %zu, "
-      "snapshots %llu; reorder held %zu (max %zu), late %llu, forced %llu; clock-gate %llu\n",
+      "snapshots %llu; reorder held %zu (max %zu), late %llu, forced %llu; clock-gate %llu; "
+      "timeline rejected %llu, timeline held %zu, timeline switches %llu\n",
       static_cast<unsigned long long>(p.frames()), static_cast<unsigned long long>(p.scans()),
       static_cast<unsigned long long>(p.duplicates()),
       static_cast<unsigned long long>(e.measurements_processed()),
@@ -335,7 +412,9 @@ void print_pipeline_stats(const net::Pipeline& p) {
       static_cast<unsigned long long>(p.snapshots()), p.held(), p.held_high_water(),
       static_cast<unsigned long long>(p.reorder_late()),
       static_cast<unsigned long long>(p.reorder_forced()),
-      static_cast<unsigned long long>(p.future_rejected()));
+      static_cast<unsigned long long>(p.future_rejected()),
+      static_cast<unsigned long long>(p.timeline_rejected()), p.timeline_held(),
+      static_cast<unsigned long long>(p.timeline_switches()));
 }
 
 int run_replay(const Options& o) {
@@ -344,7 +423,8 @@ int run_replay(const Options& o) {
     std::fprintf(stderr, "sifted_fusiond: cannot read %s\n", o.replay_file.c_str());
     return 1;
   }
-  auto reader = replay::EventLogReader::open(in);
+  auto reader = replay::EventLogReader::open(
+      in, o.recover_truncated ? replay::TailPolicy::RecoverTorn : replay::TailPolicy::Strict);
   if (!reader.ok()) {
     std::fprintf(stderr, "sifted_fusiond: %s: %s\n", o.replay_file.c_str(),
                  std::string(replay::to_string(reader.error())).c_str());
@@ -355,8 +435,20 @@ int run_replay(const Options& o) {
   if (!open_outputs(o, out)) {
     return 1;
   }
-  net::Pipeline pipeline(r.header().sensors, r.header().config, out.line_sink(),
-                         out.snapshot_sink());
+  // Counted so a crashed run's output can be compared without the final flush,
+  // which that run never reached.
+  std::uint64_t lines = 0;
+  std::uint64_t lines_before_finish = 0;
+  net::Pipeline::LineSink file_sink = out.line_sink();
+  net::Pipeline pipeline(
+      r.header().sensors, r.header().config,
+      [&](std::string_view line) {
+        ++lines;
+        if (file_sink) {
+          file_sink(line);
+        }
+      },
+      out.snapshot_sink());
 
   std::optional<Timestamp> first;
   const auto wall0 = std::chrono::steady_clock::now();
@@ -368,23 +460,49 @@ int run_replay(const Options& o) {
       first = t;
     }
     const double offset_s = static_cast<double>(t.ns - first->ns) * 1e-9 / o.pace;
-    std::this_thread::sleep_until(wall0 + std::chrono::duration<double>(offset_s));
+    const auto until = wall0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                   std::chrono::duration<double>(offset_s));
+    // A long recorded silence must not look like a hung service.
+    while (g_signal == 0 && std::chrono::steady_clock::now() < until) {
+      std::this_thread::sleep_until(
+          std::min(until, std::chrono::steady_clock::now() +
+                              std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                  std::chrono::duration<double>(kHeartbeat))));
+      if (out.ws && std::chrono::steady_clock::now() < until) {
+        out.ws->republish();
+      }
+    }
   };
-  const auto result = replay::replay(r, pipeline, pace);
+  const auto result = replay::replay(r, pipeline, pace, [&] { lines_before_finish = lines; });
   if (out.file) {
     out.file->flush();
   }
   print_pipeline_stats(pipeline);
   if (!result.ok()) {
-    std::fprintf(stderr, "sifted_fusiond: replay stopped: %s\n",
-                 std::string(replay::to_string(result.error())).c_str());
+    std::fprintf(stderr, "sifted_fusiond: replay stopped: %s%s\n",
+                 std::string(replay::to_string(result.error())).c_str(),
+                 result.error() == replay::LogError::Truncated
+                     ? " (a crashed run? --recover-truncated replays what it recorded)"
+                     : "");
     return 1;
+  }
+  if (result.value().truncated) {
+    std::fprintf(stderr,
+                 "sifted_fusiond: WARNING: the recording is truncated: the run ended abnormally; "
+                 "%llu complete records replayed, %llu bytes of a torn record discarded\n",
+                 static_cast<unsigned long long>(result.value().frames + result.value().ticks),
+                 static_cast<unsigned long long>(result.value().torn_bytes));
+  }
+  if (o.recover_truncated) {
+    std::fprintf(stderr, "sifted_fusiond: recovered replay: %llu output lines before final flush\n",
+                 static_cast<unsigned long long>(lines_before_finish));
   }
   if (o.hold && out.ws) {
     std::fprintf(stderr,
                  "sifted_fusiond: replay finished; serving the last snapshot (Ctrl-C to exit)\n");
     while (g_signal == 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      std::this_thread::sleep_for(kHeartbeat);
+      out.ws->republish();
     }
   }
   return 0;
@@ -412,16 +530,38 @@ int run_live(const Options& o) {
   if (!open_outputs(o, out)) {
     return 1;
   }
-  std::unique_ptr<std::ofstream> log_file;
+  std::unique_ptr<net::DurableFile> log_file;
+  std::unique_ptr<std::ostream> log_stream;
   std::unique_ptr<replay::EventLogWriter> log;
   const replay::RunHeader header{table.value(), o.config};
+  // Reported once, the moment it happens; tracking carries on without the log.
+  bool log_ok = true;
+  auto check_log = [&] {
+    if (log_ok && log_file && log_file->failed()) {
+      log_ok = false;
+      std::fprintf(stderr,
+                   "sifted_fusiond: ERROR: event log write failed (%s): recording stopped, "
+                   "tracking continues\n",
+                   log_file->error().c_str());
+    }
+  };
   if (!o.record_file.empty()) {
-    log_file = std::make_unique<std::ofstream>(o.record_file, std::ios::binary | std::ios::trunc);
-    if (!*log_file) {
-      std::fprintf(stderr, "sifted_fusiond: cannot write %s\n", o.record_file.c_str());
+    net::DurableFile::Policy policy;
+    policy.max_records = o.record_flush_records;
+    policy.max_age = std::chrono::milliseconds(std::llround(o.record_flush_s * 1e3));
+    policy.sync_interval = std::chrono::milliseconds(std::llround(o.record_sync_s * 1e3));
+    auto created = net::DurableFile::create(o.record_file, policy);
+    if (!created.ok()) {
+      std::fprintf(stderr, "sifted_fusiond: %s\n", created.error().c_str());
       return 1;
     }
-    log = std::make_unique<replay::EventLogWriter>(*log_file, header);
+    log_file = std::move(created.value());
+    log_stream = std::make_unique<std::ostream>(log_file.get());
+    log = std::make_unique<replay::EventLogWriter>(*log_stream, header);
+    // On the disk before the first frame: however early a crash comes, the
+    // recording is a valid, replayable log.
+    (void)log_file->sync_to_device();
+    check_log();
   }
   net::Pipeline pipeline(header.sensors, header.config, out.line_sink(), out.snapshot_sink());
 
@@ -447,30 +587,74 @@ int run_live(const Options& o) {
     last = t;
     return t;
   };
-  bool log_ok = true;
+  using SteadyClock = std::chrono::steady_clock;
   auto consume = [&](const net::Frame& f) {
     const Timestamp t = stamp(f.recv);
     const std::span<const std::uint8_t> bytes(f.bytes.data(), f.size);
     if (log) {
-      log_ok = log->write_frame(t, bytes) && log_ok;
+      (void)log->write_frame(t, bytes);
+      log_file->record_written(SteadyClock::now());
+      check_log();
     }
     pipeline.on_frame(t, bytes);
   };
 
-  auto next_stats = std::chrono::steady_clock::now();
+  const auto idle_period_ns = std::llround(o.idle_tick_s * 1e9);
+  std::optional<Timestamp> last_idle_tick;
+  auto idle_tick_due = [&](Timestamp wall) {
+    if (idle_period_ns <= 0) {
+      return false;
+    }
+    const auto due = pipeline.next_idle_tick(idle_period_ns);
+    return due && wall >= *due &&
+           (!last_idle_tick || wall.ns - last_idle_tick->ns >= idle_period_ns);
+  };
+
+  auto next_stats = SteadyClock::now();
+  auto next_output_flush = SteadyClock::now();
+  auto next_heartbeat = SteadyClock::now() + kHeartbeat;
+  std::uint64_t published = 0;
   while (g_signal == 0) {
-    if (auto f = queue.pop_for(std::chrono::milliseconds(100))) {
+    const auto f = queue.pop_for(std::chrono::milliseconds(100));
+    if (f) {
       consume(*f);
-    } else if (pipeline.has_pending()) {
-      // The input went quiet with a scan pending: flush it, and record that
-      // we did, so the replay flushes at the same point.
-      const Timestamp t = stamp(clock.now());
+    }
+    // A flush needs the input to have gone quiet. Idle duties do not: junk that
+    // keeps arriving must not hide the fact that no real data does.
+    const Timestamp wall = clock.now();
+    const bool flush_due = !f && pipeline.has_pending();
+    const bool idle_due = !flush_due && idle_tick_due(wall);
+    if (flush_due || idle_due) {
+      // Recorded, so the replay acts at the same point.
+      const Timestamp t = stamp(wall);
+      if (idle_due) {
+        last_idle_tick = t;
+      }
       if (log) {
-        log_ok = log->write_tick(t) && log_ok;
+        (void)log->write_tick(t);
+        log_file->record_written(SteadyClock::now());
+        check_log();
       }
       pipeline.on_tick(t);
     }
-    if (o.stats_interval_s > 0 && std::chrono::steady_clock::now() >= next_stats) {
+
+    const auto steady = SteadyClock::now();
+    if (log_file) {
+      log_file->poll(steady);
+      check_log();
+    }
+    if (out.file && steady >= next_output_flush) {
+      out.file->flush();
+      next_output_flush = steady + std::chrono::milliseconds(100);
+    }
+    if (out.ws && pipeline.snapshots() != published) {
+      published = pipeline.snapshots();
+      next_heartbeat = steady + kHeartbeat;
+    } else if (out.ws && steady >= next_heartbeat) {
+      out.ws->republish();
+      next_heartbeat = steady + kHeartbeat;
+    }
+    if (o.stats_interval_s > 0 && steady >= next_stats) {
       next_stats += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
           std::chrono::duration<double>(o.stats_interval_s));
       std::fprintf(stderr,
@@ -500,7 +684,8 @@ int run_live(const Options& o) {
     pipeline.finish(*last);  // the replay's end-of-log flush uses the same time
   }
   if (log_file) {
-    log_file->flush();
+    (void)log_file->sync_to_device();
+    check_log();
   }
   if (out.file) {
     out.file->flush();

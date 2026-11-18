@@ -115,9 +115,17 @@ commands to reproduce them.
 - **Opt-in clock gate ([ADR 0010](docs/adr/0010-fault-handling.md)).**
   It stops a sensor with a fast clock from invalidating other sensors' data, but
   it needs senders and receiver on a common timebase, so it is off by default.
+- **Timeline guard, honest silence, durable recording ([ADR 0012](docs/adr/0012-live-reliability.md)).**
+  One forged timestamp is rejected without a common timebase, the operator is told
+  when the picture is stale, and a crash costs a bounded tail of the recording. New
+  timelines take a few seconds to confirm.
 
 ## Known limitations
 
+- **Sensors are not authenticated.** One forged frame is rejected, but a sustained
+  attacker who can reach the UDP port can walk the clock forward in small steps, or
+  take over the timeline during an outage until real data returns
+  ([ADR 0012](docs/adr/0012-live-reliability.md#residual-risk-no-authentication-see-the-threat-model)).
 - **Bit-equality holds only for the same binary and architecture.** Identical
   results across compilers or maths libraries are not promised, because
   transcendental functions such as `sin` and `atan2` can differ

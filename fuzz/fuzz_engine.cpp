@@ -8,7 +8,9 @@
 //
 //   A. straight into two Engines, in scans of input-chosen size;
 //   B. as encoded frames into two net::Pipelines with input-chosen receive
-//      times, ticks, reorder window and clock gate (the daemon path).
+//      times, ticks, reorder window, clock gate, timeline guard and feed
+//      status (the daemon path). Every frame must end up in exactly one of:
+//      the engine, duplicates, clock gate, timeline guard, decode errors.
 //
 // Invariants checked on every input:
 //   1. no crash, hang, out-of-bounds access or UB (ASan/UBSan);
@@ -193,6 +195,11 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   pc.reorder_capacity = 1 + r.u8() % 16;
   pc.max_time_ahead_s = (r.u8() % 4) * 0.5;
   pc.snapshot_interval_s = (r.u8() % 4) * 0.5;
+  pc.max_time_jump_s = (r.u8() % 4) * 1.5;
+  pc.timeline_confirm_frames = 2 + r.u8() % 3;
+  pc.timeline_confirm_s = (r.u8() % 4) * 0.5;
+  pc.feed_stale_factor = (r.u8() % 3) * 1.5;
+  pc.feed_stale_min_s = (r.u8() % 4) * 0.5;
   if (!net::is_valid(pc)) {
     return 0;  // e.g. a trace size of 0 that the store rejects: not this target's business
   }
@@ -255,11 +262,21 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     pa.on_frame(Timestamp{recv}, bytes);
     pb.on_frame(Timestamp{recv}, bytes);
     check(pa.held() <= pc.reorder_capacity);
+    check(pa.timeline_held() <= 4 * pc.reorder_capacity);  // four candidates at most
     check_bounds(pa.engine());
+    // Whenever a tick is asked for, taking it must settle that request: a run
+    // that keeps asking would grow its log for ever.
+    if (const auto due = pa.next_idle_tick(1'000'000'000); due && due->ns <= recv) {
+      pa.on_tick(Timestamp{recv});
+      pb.on_tick(Timestamp{recv});
+      const auto again = pa.next_idle_tick(1'000'000'000);
+      check(!again || again->ns > recv);
+    }
   }
   pa.finish(Timestamp{recv});
   pb.finish(Timestamp{recv});
   check(!pa.has_pending());
+  check(pa.timeline_held() == 0);
   check(out_a == out_b);
   check(same_tracks(pa.engine(), pb.engine()));
   // Frames that decode either reach the engine or are counted on the way.
@@ -269,7 +286,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   }
   check(pa.frames() == items.size());
   check(pa.engine().measurements_processed() + pa.duplicates() + pa.future_rejected() +
-            decode_errors ==
+            pa.timeline_rejected() + decode_errors ==
         items.size());
   return 0;
 }

@@ -15,6 +15,7 @@ add_executable(sifted_tests
   geodetic_test.cpp
   impairment_test.cpp
   ingest_test.cpp
+  live_reliability_test.cpp
   measurement_test.cpp
   multi_target_regression_test.cpp
   reorder_test.cpp

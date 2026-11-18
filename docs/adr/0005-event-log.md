@@ -35,6 +35,15 @@ wire decoder on replay.
 reproduce the M2 behaviour exactly, so M2 recordings still replay. Unknown
 keys and bad values are still refused. The format version stays 1.
 
+**Amendment (ADR 0012).** A tick now records any moment the engine thread acted
+on the passage of time, including idle duties such as reporting silence. New
+optional parameters: `max_time_jump_s`, `timeline_confirm_frames`,
+`timeline_confirm_s`, `feed_stale_factor`, `feed_stale_min_s`; a header without
+them keeps the guard and the feed status off, so older logs replay byte for byte.
+The daemon hands records to the OS on a bounded schedule, and a log whose final
+record was torn by a crash can be replayed with an explicit recovery mode. The
+format and the strict reader are unchanged.
+
 ## Consequences
 + Replay equality is a byte comparison of the output stream; tested for
   clean, impaired (loss, jitter, duplicates, outage) and faulted runs.

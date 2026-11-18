@@ -3,7 +3,8 @@
 namespace sifted::replay {
 
 Result<ReplayStats, LogError> replay(EventLogReader& reader, net::Pipeline& pipeline,
-                                     const std::function<void(Timestamp)>& before_record) {
+                                     const std::function<void(Timestamp)>& before_record,
+                                     const std::function<void()>& before_finish) {
   ReplayStats stats;
   SimulatedClock clock;
   bool started = false;
@@ -32,6 +33,11 @@ Result<ReplayStats, LogError> replay(EventLogReader& reader, net::Pipeline& pipe
       ++stats.ticks;
       pipeline.on_tick(clock.now());
     }
+  }
+  stats.truncated = reader.torn_tail();
+  stats.torn_bytes = reader.torn_bytes();
+  if (before_finish) {
+    before_finish();
   }
   pipeline.finish(clock.now());
   return stats;

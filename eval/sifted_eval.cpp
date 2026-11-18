@@ -816,7 +816,8 @@ std::string markdown(const Options& o, const Results& r) {
       "through the seeded impairment model (ADR 0008), then fed to `net::Pipeline` exactly as "
       "the daemon consumes them: arrival order, receive time = arrival time, a quiet tick after " +
       fixed(static_cast<double>(kDaemonTickNs) * 1e-6, 0) +
-      " ms (`run_pipeline`). Truth instant T is scored on what the operator would see at T, so "
+      " ms (`run_pipeline`). Truth instant T is scored on the tracks the pipeline holds at T, "
+      "extrapolated to T, so "
       "even a clean network scores slightly worse than the direct feed: the scan stamped T is "
       "still being assembled.\n";
   for (const ImpairmentLevel& l : impairment_levels()) {

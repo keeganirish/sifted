@@ -56,6 +56,10 @@ Deliberately not mitigated (documented, tested for bounded behaviour):
 - **Spoofed source addresses** defeat per-address limits (UDP is
   unauthenticated); the bounded queue remains the backstop.
 
+**Amendment (ADR 0012).** The gate keeps its semantics and stays off by default.
+The timeline guard now protects the default configuration without a common
+timebase. The gate remains the stronger, tighter check where senders do share one.
+
 ## Consequences
 + One bad clock can no longer silence the other sensors (when the gate is
   configured).

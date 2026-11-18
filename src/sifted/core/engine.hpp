@@ -178,6 +178,21 @@ class Engine {
   std::vector<TrackEstimate> tracks_at(Timestamp t, std::size_t trace_events = 0) const;
   std::optional<TrackEstimate> track_at(TrackId id, Timestamp t,
                                         std::size_t trace_events = 0) const;
+  // The picture an operator should see at `t` (>= time()) if nothing arrives
+  // until then: tracks_at(t), minus the tracks the lifecycle would have
+  // dropped by `t`, with confirmed tracks past coast_after_s shown as coasting.
+  // Read-only: the engine's state, and so all later tracking, is unchanged.
+  std::vector<TrackEstimate> tracks_if_silent_until(Timestamp t,
+                                                    std::size_t trace_events = 0) const;
+
+  // True if `m` passes every check that does not depend on the engine clock.
+  // A measurement that fails can never move the clock or touch a track.
+  bool can_accept(const Measurement& m) const noexcept;
+
+  // The input moved to an earlier timeline: every live track is dropped (ids
+  // keep counting up) and the clock is cleared, so measurements are accepted
+  // again. `t` is the time recorded on the dropped tracks.
+  void restart_timeline(Timestamp t);
 
   // The engine clock: time of the latest accepted measurement group.
   std::optional<Timestamp> time() const noexcept { return now_; }
@@ -208,6 +223,12 @@ class Engine {
  private:
   void process_group(std::span<const Measurement> group, std::vector<MeasurementResult>& out);
   void maintain(Timestamp t);
+  struct LifecycleVerdict {
+    association::DropReason drop = association::DropReason::None;
+    bool coast = false;
+  };
+  // What the lifecycle decides for a track at `t`. Changes nothing.
+  LifecycleVerdict lifecycle_at(const store::TrackRecord& r, Timestamp t) const;
   void update_manoeuvre(store::TrackRecord& r, double d2, Timestamp t);
   TrackEstimate estimate_of(const store::TrackRecord& r) const;
 
@@ -225,7 +246,7 @@ class Engine {
 
   std::uint64_t processed_ = 0;
   std::array<std::uint64_t, kMeasurementOutcomeCount> outcome_counts_{};
-  std::array<std::uint64_t, 4> drop_counts_{};
+  std::array<std::uint64_t, 5> drop_counts_{};
 };
 
 }  // namespace sifted

@@ -34,7 +34,7 @@ Running the app: `./sifted` (launcher, serves http://127.0.0.1:8000/), `./sifted
 
 ## Architecture
 
-Pipeline: UDP rx thread (size check → per-source rate limit → strict decode → recv timestamp) → `BoundedQueue` → engine thread running `net::Pipeline` (dedup → clock gate → reorder stage → scan assembly → `Engine`: gate/associate → estimate → track store) → output lines + snapshots → WebSocket thread (publishes latest snapshot only). Every frame and tick is written to the event log with its receive time. Thread ownership table is in `docs/design.md` §2.
+Pipeline: UDP rx thread (size check → per-source rate limit → strict decode → recv timestamp) → `BoundedQueue` → engine thread running `net::Pipeline` (timeline guard → dedup → clock gate → reorder stage → scan assembly → `Engine`: gate/associate → estimate → track store) → output lines + snapshots → WebSocket thread (publishes latest snapshot only). Every frame and tick is written to the event log with its receive time. Thread ownership table is in `docs/design.md` §2.
 
 Library split (`src/CMakeLists.txt`) is a deliberate boundary:
 - `sifted_core`: the deterministic core — no threads, sockets or wall clock. Includes `core`, `wire`, `estimation`, `association`, `store`, `replay`, and the *pure* parts of `net` (ingest pipeline, dedup, impairment model, snapshot).
@@ -69,4 +69,4 @@ Every parser of external input (wire frames, event log + header, sensor table, W
 - `sim/`: standard-library Python; no third-party dependencies.
 - `install.sh` must stay idempotent (CI runs it twice on Ubuntu and macOS). Shell scripts need LF endings.
 
-Design decisions are recorded in `docs/adr/0001`–`0011`; consult the relevant ADR before changing wire format, sensor table, association/lifecycle, event log, networking, tangent-plane origin, impairment model, out-of-order policy, fault handling or benchmark method.
+Design decisions are recorded in `docs/adr/0001`–`0012`; consult the relevant ADR before changing wire format, sensor table, association/lifecycle, event log, networking, tangent-plane origin, impairment model, out-of-order policy, fault handling or benchmark method.

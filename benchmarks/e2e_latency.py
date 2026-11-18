@@ -78,6 +78,7 @@ class WsReader(threading.Thread):
             buf += self.sock.recv(4096)
         self.buf = buf.split(b"\r\n\r\n", 1)[1]
         self.snapshots: list[tuple[int, int]] = []  # (monotonic ns on arrival, time_ns)
+        self.seen: set[int] = set()  # the daemon repeats a snapshot as a heartbeat when idle
         self.stop = False
 
     def _read(self, n: int) -> bytes:
@@ -101,13 +102,16 @@ class WsReader(threading.Thread):
                 payload = self._read(n)
                 now = time.monotonic_ns()
                 if b0 & 0x0F == 1:
-                    t = json.loads(payload)["time_ns"]
-                    self.snapshots.append((now, t))
+                    snapshot = json.loads(payload)
+                    if snapshot["seq"] not in self.seen:
+                        self.seen.add(snapshot["seq"])
+                        self.snapshots.append((now, snapshot["time_ns"]))
         except (EOFError, OSError):
             pass
 
 
-def run(binary: str, targets: int, scans: int, window: float, period: float, seed: int) -> list[float]:
+def run(binary: str, targets: int, scans: int, window: float, period: float, seed: int,
+        record: bool = False) -> list[float]:
     with tempfile.TemporaryDirectory() as tmp:
         cfg = os.path.join(tmp, "sensors.cfg")
         with open(cfg, "w", encoding="ascii") as f:
@@ -116,7 +120,8 @@ def run(binary: str, targets: int, scans: int, window: float, period: float, see
         proc = subprocess.Popen(
             [binary, "--sensors", cfg, "--listen", f"127.0.0.1:{udp}", "--ws-port", str(ws),
              "--snapshot-interval", "0", "--reorder-window", str(window), "--stats-interval", "0",
-             "--max-tracks", str(max(1024, 4 * targets)), "--queue", str(max(4096, 4 * targets))],
+             "--max-tracks", str(max(1024, 4 * targets)), "--queue", str(max(4096, 4 * targets)),
+             *(["--record", os.path.join(tmp, "run.siftlog")] if record else [])],
             stderr=subprocess.DEVNULL)
         try:
             reader = WsReader(ws)
@@ -172,11 +177,12 @@ def main() -> int:
     ap.add_argument("--windows", default="0,0.5")
     ap.add_argument("--period", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--record", action="store_true", help="also record an event log")
     a = ap.parse_args()
     print("bench,targets,reorder_window_s,scans_measured,median_ms,p95_ms,p99_ms,max_ms")
     for w in (float(x) for x in a.windows.split(",")):
         for n in (int(x) for x in a.targets.split(",")):
-            lat = sorted(run(a.binary, n, a.scans, w, a.period, a.seed))
+            lat = sorted(run(a.binary, n, a.scans, w, a.period, a.seed, a.record))
             if not lat:
                 print(f"e2e,{n},{w},0,,,,")
                 continue

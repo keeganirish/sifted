@@ -89,6 +89,10 @@ class WebSocketServer {
   std::uint16_t port() const noexcept { return port_; }
   // Thread-safe. The newest snapshot replaces any older one not yet sent.
   void publish(std::string text);
+  // Sends the latest snapshot again, unchanged: the engine thread's proof of
+  // life while it has nothing new to say. A client that never hears it knows
+  // the service is hung. Does nothing before the first publish().
+  void republish();
   void stop();
   std::size_t clients() const noexcept { return clients_.load(std::memory_order_relaxed); }
   const WebSocketStats& stats() const noexcept { return stats_; }

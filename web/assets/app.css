@@ -171,6 +171,7 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 .verify-result { margin-top: 12px; font-size: 13px; padding: 9px 11px; border-radius: var(--radius-sm); background: var(--panel-3); }
 .verify-result.ok { background: #12301b; color: #9be8a8; }
 .verify-result.err { background: #3b1616; color: #ffb3ae; }
+.verify-result.warn { background: #3a2e10; color: #ffd36a; }
 
 .watch { margin: 0; padding: 0; list-style: none; counter-reset: w; }
 .watch li { position: relative; padding: 8px 10px 8px 52px; border-radius: var(--radius-sm); color: var(--muted); font-size: 13px;
@@ -293,6 +294,12 @@ table.tracks.truth-on th, table.tracks.truth-on td { padding-left: 3px; padding-
 .truth-mark.missed b { color: var(--missed); }
 .map-note { position: absolute; top: 12px; left: 60px; z-index: 450; font-size: 12px; color: #ffd36a;
   background: rgba(58, 46, 16, .92); border: 1px solid #5a4716; padding: 6px 10px; border-radius: var(--radius-sm); }
+
+/* Says why the picture cannot be trusted right now (sensors silent, service not responding). */
+.feed-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 460;
+  max-width: min(560px, calc(100% - 140px)); font-size: 13px; font-weight: 600; line-height: 1.35; color: #ffd36a;
+  background: rgba(58, 46, 16, .95); border: 1px solid #806419; padding: 8px 12px; border-radius: var(--radius-sm); }
+.feed-banner.err { color: #ffb3ae; background: rgba(59, 22, 22, .96); border-color: #8c2f2a; }
 
 /* After a run stops, the last picture stays on the map, dimmed. */
 body.stale .leaflet-overlay-pane, body.stale .leaflet-marker-pane { opacity: .45; }

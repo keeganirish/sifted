@@ -41,6 +41,7 @@ enum class DropReason : std::uint8_t {
   TentativeTimeout,  // tentative and not updated for tentative_timeout_s
   Stale,             // confirmed/coasting and not updated for drop_after_s
   Uncertainty,       // predicted position sigma above max_position_sigma_m
+  TimelineChange,    // the input moved to an earlier timeline (ADR 0012)
 };
 
 std::string_view to_string(DropReason r) noexcept;

@@ -33,11 +33,47 @@ void trace_event(std::string& out, const store::TraceEvent& e) {
   out += "\"}";
 }
 
+void opt_int(std::string& out, const std::optional<std::int64_t>& v) {
+  out += v ? std::to_string(*v) : "null";
+}
+
+void feed_status(std::string& out, const FeedStatus& f) {
+  out += ",\"feed\":{\"state\":\"";
+  out += to_string(f.state);
+  out += "\",\"age_ms\":";
+  opt_int(out, f.age_ms);
+  out += ",\"predicted_ms\":" + std::to_string(f.predicted_ms) + ",\"sensors\":[";
+  for (std::size_t i = 0; i < f.sensors.size(); ++i) {
+    const SensorFeed& s = f.sensors[i];
+    out += (i > 0 ? ",{\"id\":" : "{\"id\":") + std::to_string(s.id) + ",\"state\":\"";
+    out += to_string(s.state);
+    out += "\",\"age_ms\":";
+    opt_int(out, s.age_ms);
+    out += ",\"stale_after_ms\":" + std::to_string(s.stale_after_ms) + "}";
+  }
+  out += "]}";
+}
+
 }  // namespace
+
+std::string_view to_string(FeedState s) noexcept {
+  switch (s) {
+    case FeedState::Waiting:
+      return "waiting";
+    case FeedState::Live:
+      return "live";
+    case FeedState::Degraded:
+      return "degraded";
+    case FeedState::Stale:
+      return "stale";
+  }
+  return "unknown";
+}
 
 std::string format_snapshot(std::uint64_t seq, Timestamp time,
                             const std::vector<TrackEstimate>& tracks,
-                            const std::optional<estimation::GeoOrigin>& origin) {
+                            const std::optional<estimation::GeoOrigin>& origin,
+                            const std::optional<FeedStatus>& feed) {
   std::string out = "{\"type\":\"sifted.tracks\",\"version\":" + std::to_string(kSnapshotVersion) +
                     ",\"seq\":" + std::to_string(seq) + ",\"time_ns\":" + std::to_string(time.ns) +
                     ",\"origin\":";
@@ -51,6 +87,9 @@ std::string format_snapshot(std::uint64_t seq, Timestamp time,
     out += "}";
   } else {
     out += "null";
+  }
+  if (feed) {
+    feed_status(out, *feed);
   }
   out += ",\"tracks\":[";
   bool first = true;

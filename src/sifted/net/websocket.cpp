@@ -233,6 +233,17 @@ void WebSocketServer::wake() noexcept {
   [[maybe_unused]] const ssize_t n = ::write(wake_w_, &b, 1);  // full pipe: already awake
 }
 
+void WebSocketServer::republish() {
+  {
+    const std::lock_guard<std::mutex> lock(mu_);
+    if (!latest_) {
+      return;
+    }
+    ++version_;
+  }
+  wake();
+}
+
 void WebSocketServer::publish(std::string text) {
   auto p = std::make_shared<const std::string>(std::move(text));
   {

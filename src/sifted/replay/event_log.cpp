@@ -141,6 +141,14 @@ const std::vector<Param>& params() {
       // Display only: an older log replays the same tracks, with the default excerpt.
       added_later(uns<std::size_t>("snapshot_trace_events",
                                    [](C& c) -> std::size_t& { return c.snapshot_trace_events; })),
+      // ADR 0012. Absent from older logs: the guard and the feed status stay off.
+      added_later(dbl("max_time_jump_s", [](C& c) -> double& { return c.max_time_jump_s; })),
+      added_later(
+          uns<std::uint32_t>("timeline_confirm_frames",
+                             [](C& c) -> std::uint32_t& { return c.timeline_confirm_frames; })),
+      added_later(dbl("timeline_confirm_s", [](C& c) -> double& { return c.timeline_confirm_s; })),
+      added_later(dbl("feed_stale_factor", [](C& c) -> double& { return c.feed_stale_factor; })),
+      added_later(dbl("feed_stale_min_s", [](C& c) -> double& { return c.feed_stale_min_s; })),
   };
   return p;
 }
@@ -330,7 +338,7 @@ bool EventLogWriter::write_tick(Timestamp recv) { return write(RecordType::Tick,
 
 bool EventLogWriter::good() const { return out_->good(); }
 
-Result<EventLogReader, LogError> EventLogReader::open(std::istream& in) {
+Result<EventLogReader, LogError> EventLogReader::open(std::istream& in, TailPolicy tail) {
   std::array<std::uint8_t, kPreambleSize> pre{};
   if (!read_exact(in, pre.data(), pre.size())) {
     return LogError::Truncated;
@@ -361,7 +369,16 @@ Result<EventLogReader, LogError> EventLogReader::open(std::istream& in) {
   if (!h.ok()) {
     return h.error();
   }
-  return EventLogReader(in, h.value());
+  return EventLogReader(in, h.value(), tail);
+}
+
+Result<std::optional<LogRecord>, LogError> EventLogReader::torn(LogError strict_error,
+                                                                std::uint64_t bytes) {
+  if (tail_ == TailPolicy::Strict) {
+    return strict_error;
+  }
+  torn_bytes_ = bytes;
+  return std::optional<LogRecord>{};
 }
 
 Result<std::optional<LogRecord>, LogError> EventLogReader::next() {
@@ -371,7 +388,7 @@ Result<std::optional<LogRecord>, LogError> EventLogReader::next() {
     return std::optional<LogRecord>{};  // clean end of file
   }
   if (!read_exact(*in_, head.data() + 1, head.size() - 1)) {
-    return LogError::Truncated;
+    return torn(LogError::Truncated, 1 + static_cast<std::uint64_t>(in_->gcount()));
   }
   const auto type = head[0];
   const std::uint64_t len = get_le(head.data() + 2, 2);
@@ -385,12 +402,16 @@ Result<std::optional<LogRecord>, LogError> EventLogReader::next() {
   }
   std::vector<std::uint8_t> rest(static_cast<std::size_t>(len) + 4);
   if (!read_exact(*in_, rest.data(), rest.size())) {
-    return LogError::Truncated;
+    return torn(LogError::Truncated, head.size() + static_cast<std::uint64_t>(in_->gcount()));
   }
   std::uint32_t crc = crc32(head);
   crc = crc32(std::span<const std::uint8_t>(rest.data(), static_cast<std::size_t>(len)), crc);
   if (crc != get_le(rest.data() + len, 4)) {
-    return LogError::BadChecksum;
+    // Only the very last record can have been torn; any other is corrupt.
+    const bool last =
+        tail_ == TailPolicy::RecoverTorn && in_->peek() == std::istream::traits_type::eof();
+    return last ? torn(LogError::BadChecksum, head.size() + rest.size())
+                : Result<std::optional<LogRecord>, LogError>(LogError::BadChecksum);
   }
   LogRecord r;
   r.type = static_cast<RecordType>(type);

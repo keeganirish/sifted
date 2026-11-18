@@ -157,6 +157,22 @@ What dominates is structural, not processing:
   (four 256-detection chunks, each associated, formatted as JSON and
   published).
 
+### Cost of crash-durable recording
+
+The daemon with and without `--record` (ADR 0012: records handed to the OS every
+64 records or 100 ms, `fdatasync` on its own thread every second). One run of 30
+scans per row, on a WSL2 development machine, so compare the columns with each
+other and not with the table above. The difference is within run-to-run noise.
+
+| targets | reorder window s | median ms, not recording | median ms, recording |
+|---:|---:|---:|---:|
+| 100 | 0.0 | 101.98 | 101.69 |
+| 1000 | 0.0 | 119.00 | 117.33 |
+| 100 | 0.5 | 502.03 | 501.94 |
+| 1000 | 0.5 | 533.58 | 532.97 |
+
+Reproduce with `python3 benchmarks/e2e_latency.py <daemon> --targets 100,1000 --record`.
+
 ## Reproduce
 
 ```bash

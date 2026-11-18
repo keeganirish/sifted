@@ -30,6 +30,8 @@ std::string_view to_string(DropReason r) noexcept {
       return "stale";
     case DropReason::Uncertainty:
       return "uncertainty";
+    case DropReason::TimelineChange:
+      return "timeline change";
   }
   return "unknown";
 }

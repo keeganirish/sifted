@@ -29,6 +29,7 @@ add_library(sifted_core STATIC
 # The threaded, OS-facing edge (sockets, wall clock) is kept out of the
 # deterministic core: only the daemon and its tests link it.
 add_library(sifted_net STATIC
+  sifted/net/durable_file.cpp
   sifted/net/sha1.cpp
   sifted/net/system_clock.cpp
   sifted/net/rate_limit.cpp
