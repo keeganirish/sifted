@@ -47,6 +47,8 @@ constexpr const char* kUsage =
     "  --levels LIST     impairment levels (default: all of clean,mild,moderate,severe)\n"
     "  --window LIST     reorder windows [s] for the pipeline runs (default 0.5)\n"
     "  --format csv|md   output format (default md)\n"
+    "  --match-distance M  scoring match distance [m] (default 100, sized for the\n"
+    "                    simulator's radar; eval/sifted/eval/scenario.hpp)\n"
     "  --out FILE        write to FILE instead of standard output\n";
 
 // ---- options ------------------------------------------------------------------
@@ -57,6 +59,7 @@ struct Options {
   std::vector<std::string> levels;
   std::vector<double> windows{kDaemonReorderWindowS};
   bool markdown = true;
+  double match_distance_m = kMatchDistanceM;
   std::string out;
   std::vector<std::string> args;  // as given, echoed in the report
   bool help = false;
@@ -102,7 +105,7 @@ Options parse_args(int argc, char** argv) {
       return o;
     }
     if (a != "--scenarios" && a != "--seeds" && a != "--levels" && a != "--window" &&
-        a != "--format" && a != "--out") {
+        a != "--format" && a != "--out" && a != "--match-distance") {
       throw std::invalid_argument("unknown option " + a);
     }
     if (i + 1 >= argc) {
@@ -137,6 +140,11 @@ Options parse_args(int argc, char** argv) {
           throw std::invalid_argument("window out of range: " + s);
         }
         o.windows.push_back(w);
+      }
+    } else if (a == "--match-distance") {
+      o.match_distance_m = number<double>(v, "match distance");
+      if (!(o.match_distance_m > 0.0 && o.match_distance_m <= 1.0e5)) {
+        throw std::invalid_argument("match distance out of range: " + v);
       }
     } else if (a == "--format") {
       if (v != "csv" && v != "md") {
@@ -264,14 +272,15 @@ struct Run {
   std::optional<Recovery> recovery;
 };
 
-Run run_one(const Scenario& sc, const Condition& c, double window_s, std::uint64_t seed) {
+Run run_one(const Scenario& sc, const Condition& c, double window_s, std::uint64_t seed,
+            double match_distance_m) {
   Run r;
   if (c.direct) {
     std::vector<Measurement> ms = sc.measurements;
     if (c.drop_bearing_only) {
       std::erase_if(ms, [](const Measurement& m) { return m.kind == SensorKind::BearingOnly; });
     }
-    r.score = run_engine(sc, ms);
+    r.score = run_engine(sc, ms, {}, match_distance_m);
     return r;
   }
   const std::int64_t t0 = sc.truth.front().time_ns;
@@ -295,7 +304,8 @@ Run run_one(const Scenario& sc, const Condition& c, double window_s, std::uint64
   }
   net::PipelineConfig pc;
   pc.reorder_window_s = window_s;
-  const PipelineRun p = run_pipeline(sc, net::impair(sent_frames(ms), ic), pc);
+  const PipelineRun p =
+      run_pipeline(sc, net::impair(sent_frames(ms), ic), pc, kDaemonTickNs, match_distance_m);
   r.score = p.score;
   r.duplicates = p.duplicates;
   r.reorder_late = p.reorder_late;
@@ -481,10 +491,10 @@ Results evaluate(const Options& o) {
         const double w = c.direct ? 0.0 : o.windows[static_cast<std::size_t>(wi)];
         if (c.seeded()) {
           for (const std::uint64_t seed : o.seeds) {
-            cell.add(run_one(sc, c, w, seed));
+            cell.add(run_one(sc, c, w, seed, o.match_distance_m));
           }
         } else {
-          cell.add(run_one(sc, c, w, o.seeds.empty() ? 1 : o.seeds.front()));
+          cell.add(run_one(sc, c, w, o.seeds.empty() ? 1 : o.seeds.front(), o.match_distance_m));
         }
       }
     }
@@ -844,10 +854,10 @@ std::string markdown(const Options& o, const Results& r) {
       "- **Reported tracks** are the confirmed and coasting tracks, extrapolated to T. They are "
       "matched one-to-one to the truth targets present at T: a target's previous match is kept "
       "while that track is still reported and within " +
-      fixed(kMatchDistanceM, 0) +
+      fixed(o.match_distance_m, 0) +
       " m; the rest are matched by a minimum-total-distance assignment with pairs further apart "
       "than " +
-      fixed(kMatchDistanceM, 0) +
+      fixed(o.match_distance_m, 0) +
       " m forbidden. The matcher knows nothing about which track \"should\" be which target.\n"
       "- **RMSE** (position, per target): over covered, matched instants at least " +
       fixed(kRmseBurnInS, 0) +

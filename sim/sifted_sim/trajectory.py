@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -82,12 +83,22 @@ class Trajectory:
         return _advance(self._starts[-1], self.segments[-1], self.segments[-1].duration_s)
 
 
+class Path(Protocol):
+    """What a Target needs of its trajectory: Trajectory here, or a recorded
+    real flight path (sifted_sim.recorded.RecordedTrajectory)."""
+
+    @property
+    def duration_s(self) -> float: ...
+
+    def state_at(self, t: float) -> TargetState: ...
+
+
 @dataclass(frozen=True)
 class Target:
     """A trajectory placed in scenario time: it exists from start_s until start_s + duration."""
 
     target_id: int
-    trajectory: Trajectory
+    trajectory: Path
     start_s: float = 0.0
 
     def state_at(self, t_s: float) -> TargetState | None:

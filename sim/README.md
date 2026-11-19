@@ -15,6 +15,11 @@ Sensor simulators and scenario generators (Python, standard library only for now
 | `impair` | the degraded-network model (ADR 0008; exact mirror of `src/sifted/net/impairment.hpp`) and a live UDP impairment proxy |
 | `faults` | seeded sensor faults: dropout, intermittent, restart, clock offset/drift, bias, stuck (M3) |
 | `adsb` | OpenSky Network adapter: state vectors -> GeoPosition frames over UDP (ADR 0007) |
+| `geo` | WGS-84 geodetic <-> local ENU plane, mirroring the C++ projection; ECEF chord distances |
+| `statevectors` | streaming, validating reader for OpenSky historical state-vector CSV, plain or inside `.tar.gz` (untrusted input, threat model B6) |
+| `realclean` | cleaning real reports into flights (ground, duplicates, stale repeats, impossible jumps, gap splits, short segments, shared addresses), every removal counted |
+| `recorded` | `RecordedTrajectory`: a real flight path with the `Trajectory` interface (Hermite or linear interpolation), and leave-one-out error |
+| `realeval` | the real-data evaluation: `fetch`, `run`, `describe` (docs/real-data-evaluation.md) |
 
 Determinism: noise uses `random.Random(seed).random()` (stable across Python
 versions) with our own Box-Muller transform, and timestamps are integer
@@ -38,7 +43,15 @@ python3 -m sifted_sim.send crossing_pair --target 127.0.0.1:5601 --fault clock:2
 ```
 
 `tests/test_adsb_fuzz.py` property-tests the OpenSky adapter with random and
-mutated JSON (standard library only).
+mutated JSON (standard library only); `tests/test_statevectors_fuzz.py` does
+the same for the state-vector CSV reader. `tests/test_realeval.py` covers the
+real-data pipeline on synthetic inputs; its `EndToEnd` class runs the C++
+tools when `SIFTED_BIN_DIR` names their directory:
+
+```bash
+SIFTED_BIN_DIR=../build/release/eval PYTHONPATH=. python3 -m unittest tests.test_realeval
+python3 -m sifted_sim.realeval run    # real data: docs/development.md, "Real-data evaluation"
+```
 
 `tests/samples/opensky_states_sample.json` is a hand-written response in the
 format documented by OpenSky (not a captured one; no network access was

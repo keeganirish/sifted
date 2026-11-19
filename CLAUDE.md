@@ -15,6 +15,7 @@ build/dev/tests/sifted_tests --gtest_filter='Reorder.*'   # or run the gtest bin
 cd sim && PYTHONPATH=. python3 -m unittest discover -s tests   # Python tests (also run by ctest as sim_wire_python)
 cd sim && PYTHONPATH=. python3 -m unittest tests.test_impair   # single Python test module
 build/release/eval/sifted_eval --out docs/evaluation.md   # regenerate the ground-truth scorecard (release preset)
+cd sim && python3 -m sifted_sim.realeval run         # regenerate docs/real-data-evaluation.md from cached OpenSky data (`fetch` first)
 ```
 
 Presets: `dev`, `release` (benchmarks, scorecard), `asan` (ASan+UBSan), `tsan`, `fuzz` (Clang+libFuzzer), `app` (what `install.sh` builds: Release, no -Werror, no tests, no `sifted_eval`). Build dirs are `build/<preset>`. Add `-DSIFTED_FETCH_DEPS=ON` if Eigen/GoogleTest aren't installed. TSan failing with "unexpected memory mapping" on WSL2 is environmental: `sudo sysctl vm.mmap_rnd_bits=28`.
@@ -69,4 +70,4 @@ Every parser of external input (wire frames, event log + header, sensor table, W
 - `sim/`: standard-library Python; no third-party dependencies.
 - `install.sh` must stay idempotent (CI runs it twice on Ubuntu and macOS). Shell scripts need LF endings.
 
-Design decisions are recorded in `docs/adr/0001`–`0012`; consult the relevant ADR before changing wire format, sensor table, association/lifecycle, event log, networking, tangent-plane origin, impairment model, out-of-order policy, fault handling or benchmark method.
+Design decisions are recorded in `docs/adr/0001`–`0013`; consult the relevant ADR before changing wire format, sensor table, association/lifecycle, event log, networking, tangent-plane origin, impairment model, out-of-order policy, fault handling, benchmark method or the real-data evaluation.

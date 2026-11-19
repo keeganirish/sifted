@@ -99,6 +99,17 @@ def _is_hex24(v) -> bool:
     return isinstance(v, str) and len(v) == 6 and all(c in "0123456789abcdef" for c in v.lower())
 
 
+def geo_measurement(sensor_id: int, seq: int, time_ns: int, lat: float, lon: float, alt: float,
+                    sigma_m: float = 50.0, sigma_alt_m: float = 50.0) -> wire.Measurement:
+    """One ADS-B position as a GeoPosition measurement: a horizontal 1-sigma of
+    sigma_m metres expressed in degrees of latitude and of longitude."""
+    cos_lat = max(math.cos(math.radians(lat)), 0.01)
+    return wire.Measurement(
+        sensor_id=sensor_id, kind=wire.GEO_POSITION, seq=seq & 0xFFFFFFFF, time_ns=time_ns,
+        z=(lat, lon, alt),
+        sigma=(sigma_m / M_PER_DEG_LAT, sigma_m / (M_PER_DEG_LAT * cos_lat), sigma_alt_m))
+
+
 @dataclass
 class Adapter:
     """Converts responses to measurements, remembering what it already sent."""
@@ -165,12 +176,8 @@ class Adapter:
                 continue
             self.last_time[icao] = tpos
             self.newest_ns = t_ns
-            cos_lat = max(math.cos(math.radians(lat)), 0.01)
-            out.append(wire.Measurement(
-                sensor_id=self.sensor_id, kind=wire.GEO_POSITION, seq=self.seq & 0xFFFFFFFF,
-                time_ns=t_ns, z=(lat, lon, alt),
-                sigma=(self.sigma_m / M_PER_DEG_LAT, self.sigma_m / (M_PER_DEG_LAT * cos_lat),
-                       self.sigma_alt_m)))
+            out.append(geo_measurement(self.sensor_id, self.seq, t_ns, lat, lon, alt,
+                                       self.sigma_m, self.sigma_alt_m))
             self.seq += 1
         return out
 

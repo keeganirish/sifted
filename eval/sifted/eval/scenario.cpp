@@ -113,7 +113,8 @@ Scenario load_scenario_dir(const std::string& path) {
   return sc;
 }
 
-Scorer::Scorer(const std::vector<TruthRow>& truth) : truth_(&truth) {
+Scorer::Scorer(const std::vector<TruthRow>& truth, double match_distance_m)
+    : truth_(&truth), match_m_(match_distance_m) {
   for (std::size_t r = 0; r < truth.size(); ++r) {
     if (times_.empty() || truth[r].time_ns != times_.back()) {
       times_.push_back(truth[r].time_ns);
@@ -148,7 +149,7 @@ void Scorer::score(std::size_t i, const Engine& engine) {
       continue;
     }
     for (std::size_t j = 0; j < reported.size(); ++j) {
-      if (reported[j].id == it->second && taken[j] == 0 && distance(a, j) <= kMatchDistanceM) {
+      if (reported[j].id == it->second && taken[j] == 0 && distance(a, j) <= match_m_) {
         match[a] = static_cast<int>(j);
         taken[j] = 1;
       }
@@ -170,13 +171,13 @@ void Scorer::score(std::size_t i, const Engine& engine) {
   for (std::size_t a = 0; a < free_rows.size(); ++a) {
     for (std::size_t b = 0; b < free_cols.size(); ++b) {
       const double d = distance(free_rows[a], free_cols[b]);
-      if (d <= kMatchDistanceM) {
+      if (d <= match_m_) {
         cost[a * free_cols.size() + b] = d;
       }
     }
   }
   const std::vector<int> rest =
-      association::solve_assignment(cost, free_rows.size(), free_cols.size(), kMatchDistanceM);
+      association::solve_assignment(cost, free_rows.size(), free_cols.size(), match_m_);
   for (std::size_t a = 0; a < free_rows.size(); ++a) {
     if (rest[a] != association::kUnassigned) {
       match[free_rows[a]] = static_cast<int>(free_cols[static_cast<std::size_t>(rest[a])]);
@@ -247,49 +248,57 @@ void Scorer::score(std::size_t i, const Engine& engine) {
 }
 
 void Scorer::collect_nis(const Engine& engine, TrackId track, bool score) {
-  const store::TrackRecord* r = engine.store().find(track);
-  if (r == nullptr) {
+  if (engine.store().find(track) == nullptr) {
     return;
   }
-  const std::uint64_t total =
-      r->totals[static_cast<std::size_t>(store::TraceEventKind::Associated)];
-  std::uint64_t& read = nis_read_[track];
-  std::uint64_t fresh = total - read;
-  read = total;
-  // The newest `fresh` Associated events, oldest first.
-  std::vector<const store::TraceEvent*> events;
-  for (std::size_t i = r->recent.size(); i-- > 0 && events.size() < fresh;) {
-    if (r->recent.at(i).kind == store::TraceEventKind::Associated) {
-      events.push_back(&r->recent.at(i));
-    }
-  }
-  s_.nis_lost += fresh - events.size();
+  const std::vector<store::TraceEvent> events =
+      new_associated_events(engine, track, nis_read_[track], s_.nis_lost);
   if (!score) {
     return;
   }
-  for (auto it = events.rbegin(); it != events.rend(); ++it) {
-    const store::TraceEvent& e = **it;
+  for (const store::TraceEvent& e : events) {
     const auto idx = engine.sensors().index_of(e.sensor);
     if (!idx) {
       fail("trace names unknown sensor " + std::to_string(e.sensor));
     }
-    // Degrees of freedom from the data: the gate the engine compared d^2 to is
-    // the chi-square quantile of the measurement's dimension, so find the dof
-    // that reproduces it exactly (same function, same inputs).
     auto [dof_it, inserted] = dof_of_gate_.try_emplace(e.gate, 0);
     if (inserted) {
-      const double p = engine.config().association.gate_probability;
-      for (std::size_t d = 1; d <= association::kMaxChiSquareDof && dof_it->second == 0; ++d) {
-        if (association::chi_square_quantile(d, p) == e.gate) {
-          dof_it->second = d;
-        }
-      }
-    }
-    if (dof_it->second == 0) {
-      fail("no dof gives gate " + std::to_string(e.gate));
+      dof_it->second = gate_dof(engine, e.gate);
     }
     s_.nis[engine.sensors().sensors()[*idx].kind].add(e.distance2, dof_it->second);
   }
+}
+
+std::vector<store::TraceEvent> new_associated_events(const Engine& engine, TrackId track,
+                                                     std::uint64_t& read, std::size_t& lost) {
+  std::vector<store::TraceEvent> out;
+  const store::TrackRecord* r = engine.store().find(track);
+  if (r == nullptr) {
+    return out;
+  }
+  const std::uint64_t total =
+      r->totals[static_cast<std::size_t>(store::TraceEventKind::Associated)];
+  const std::uint64_t fresh = total - read;
+  read = total;
+  // The newest `fresh` Associated events, newest first.
+  for (std::size_t i = r->recent.size(); i-- > 0 && out.size() < fresh;) {
+    if (r->recent.at(i).kind == store::TraceEventKind::Associated) {
+      out.push_back(r->recent.at(i));
+    }
+  }
+  lost += fresh - out.size();
+  std::reverse(out.begin(), out.end());
+  return out;
+}
+
+std::size_t gate_dof(const Engine& engine, double gate) {
+  const double p = engine.config().association.gate_probability;
+  for (std::size_t d = 1; d <= association::kMaxChiSquareDof; ++d) {
+    if (association::chi_square_quantile(d, p) == gate) {
+      return d;
+    }
+  }
+  fail("no dof gives gate " + std::to_string(gate));
 }
 
 Score Scorer::finish(const Engine& engine) {
@@ -313,9 +322,9 @@ Score Scorer::finish(const Engine& engine) {
 }
 
 Score run_engine(const Scenario& sc, const std::vector<Measurement>& measurements,
-                 const EngineConfig& cfg) {
+                 const EngineConfig& cfg, double match_distance_m) {
   Engine engine(sc.sensors, cfg);
-  Scorer scorer(sc.truth);
+  Scorer scorer(sc.truth, match_distance_m);
   std::vector<MeasurementResult> results;
   std::size_t next = 0;
   for (std::size_t i = 0; i < scorer.instants().size(); ++i) {
@@ -338,8 +347,8 @@ Score run_engine(const Scenario& sc, const std::vector<Measurement>& measurement
   return s;
 }
 
-Score run_engine(const Scenario& sc, const EngineConfig& cfg) {
-  return run_engine(sc, sc.measurements, cfg);
+Score run_engine(const Scenario& sc, const EngineConfig& cfg, double match_distance_m) {
+  return run_engine(sc, sc.measurements, cfg, match_distance_m);
 }
 
 std::vector<net::SentFrame> sent_frames(const std::vector<Measurement>& measurements) {
@@ -361,7 +370,8 @@ std::vector<net::ArrivingFrame> clean_arrivals(const std::vector<net::SentFrame>
 }
 
 PipelineRun run_pipeline(const Scenario& sc, const std::vector<net::ArrivingFrame>& arrivals,
-                         const net::PipelineConfig& cfg, std::int64_t tick_ns) {
+                         const net::PipelineConfig& cfg, std::int64_t tick_ns,
+                         double match_distance_m) {
   PipelineRun run;
   std::size_t bearings = 0;
   std::size_t bearings_associated = 0;
@@ -382,7 +392,7 @@ PipelineRun run_pipeline(const Scenario& sc, const std::vector<net::ArrivingFram
       }
     }
   });
-  Scorer scorer(sc.truth);
+  Scorer scorer(sc.truth, match_distance_m);
   std::optional<Timestamp> last;  // time of the last event consumed
   std::size_t next = 0;
   // Consume every event (frame or quiet tick) at or before `until`.

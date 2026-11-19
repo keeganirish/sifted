@@ -1,7 +1,7 @@
 # Sifted design
 
 > Status: complete through M3. Decisions are recorded in [`adr/`](adr/)
-> (0001-0012). Measured numbers come from the tests and benchmarks named next
+> (0001-0013). Measured numbers come from the tests and benchmarks named next
 > to them; all were run with GCC 13 against Eigen 3.4.0 and GoogleTest 1.14.
 
 ## 1. Goals and non-goals

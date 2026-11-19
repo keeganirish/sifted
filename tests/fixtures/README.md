@@ -2,6 +2,13 @@
 
 Small, curated, committed inputs. Large recordings belong in `recordings/` (git-ignored).
 
+Real aircraft data is not committed here or anywhere else in the repository: the
+OpenSky archives used by the real-data evaluation forbid redistribution. They are
+fetched into `recordings/opensky-incident/raw/` (git-ignored, `recordings/` rule in
+`.gitignore`) and pinned by SHA-256 in `eval/realdata/opensky-incident.json`. The
+real-data tests use synthetic inputs generated inside `sim/tests/test_realeval.py`
+(hand-written rows and a made-up three-aircraft archive), never a real recording.
+
 - `measurement_bearing_only_v1.hex`: golden wire frame (v1), derived by hand from
   the format spec, not produced by either encoder. Both the C++ and Python tests
   must reproduce it exactly. If it has to change, the wire version changes too.

@@ -171,6 +171,44 @@ TEST(Eval, ScorecardMatchesRegressionTests) {
   }
 }
 
+// The match distance became a per-evaluation parameter for the real-data
+// evaluation (docs/real-data-evaluation.md). Its default must leave every
+// existing number unchanged: the shared scorer with kMatchDistanceM passed
+// explicitly equals the default, and so do the tool's bytes (CSV and the
+// Markdown scorecard, whose text quotes the distance).
+TEST(Eval, DefaultMatchDistanceLeavesScorecardUnchanged) {
+  const testing::Scenario sc = testing::load_scenario("close_pass");
+  const testing::Score a = testing::run_engine(sc);
+  const testing::Score b = testing::run_engine(sc, {}, testing::kMatchDistanceM);
+  EXPECT_EQ(a.rmse, b.rmse);
+  EXPECT_EQ(a.missed, b.missed);
+  EXPECT_EQ(a.id_switches, b.id_switches);
+  EXPECT_EQ(a.false_tracks, b.false_tracks);
+  // A wider distance is a different evaluation: never fewer matches.
+  const testing::Score wide = testing::run_engine(sc, {}, 300.0);
+  EXPECT_LE(wide.missed, a.missed);
+
+  const std::string dir = std::string(SIFTED_FIXTURE_DIR) + "/scenarios/close_pass";
+  const std::string base = std::string("\"") + SIFTED_EVAL_BIN + "\" --scenarios \"" + dir +
+                           "\" --levels clean --seeds 7";
+  for (const char* format : {"csv", "md"}) {
+    // One output path for both runs: the Markdown echoes it.
+    const std::string x = ::testing::TempDir() + "sifted_eval_match." + format;
+    const std::string fmt = std::string(" --format ") + format;
+    ASSERT_EQ(std::system((base + fmt + " --out \"" + x + "\"").c_str()), 0);
+    const std::string without_flag = slurp(x);
+    ASSERT_EQ(std::system((base + fmt + " --match-distance 100 --out \"" + x + "\"").c_str()), 0);
+    std::string with_flag = slurp(x);
+    if (std::string(format) == "md") {  // the echoed command line names the flag
+      const std::string flag = " --match-distance 100";
+      const auto at = with_flag.find(flag);
+      ASSERT_NE(at, std::string::npos);
+      with_flag.erase(at, flag.size());
+    }
+    EXPECT_EQ(without_flag, with_flag) << format;
+  }
+}
+
 #endif  // SIFTED_EVAL_BIN
 
 }  // namespace

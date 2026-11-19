@@ -1,0 +1,77 @@
+{
+  "name": "opensky-incident-2026",
+  "description": "OpenSky Network incident extracts (state_vectors_data4 tables of its Trino database, one aircraft each), the only openly downloadable OpenSky state-vector data found on 2026-11-19: the historical states/ dumps in the same bucket had been replaced by an empty placeholder. Index: https://opensky-network.org/datasets/ (bucket https://s3.opensky-network.org/data-samples, prefix incident-data/).",
+  "terms": "**Licence and terms.** Each archive's own README.txt states *Licence: CC BY 4.0* and asks for the citation below; the OpenSky Network's General Terms of Use & Data License Agreement (shipped with its other published datasets) also restrict use to non-profit research, education, or internal testing and evaluation, forbid redistributing the data, and require aircraft identifiers to be anonymised in publications and a copy of or link to any publication to be sent to OpenSky. To satisfy both, the archives are never committed (they are downloaded into the git-ignored `recordings/` directory and verified by SHA-256), no derived fixture is committed, and no address, callsign or registration appears in the results. Data: The OpenSky Network, https://opensky-network.org. Citation: M. Schäfer, M. Strohmeier, V. Lenders, I. Martinovic and M. Wilhelm, *Bringing up OpenSky: A large-scale ADS-B sensor network for research*, IPSN 2014.",
+  "datasets": [
+    {
+      "label": "D1",
+      "file": "fz1073_2026-09-30_dubai-tabuk.tar.gz",
+      "url": "https://s3.opensky-network.org/data-samples/incident-data/fz1073_2026-09-30_dubai-tabuk.tar.gz",
+      "bytes": 842195,
+      "sha256": "37c7aae5eacccb23533293d99674b4ecec6eba7b94d06716d09c7ef268dac045",
+      "retrieved": "2026-11-19",
+      "licence": "CC BY 4.0 + OpenSky terms",
+      "state_vectors": 4402,
+      "valid_reports": 4396,
+      "aircraft": 1,
+      "time_range_utc": ["2026-09-30T03:05:39Z", "2026-09-30T05:53:32Z"],
+      "area_deg": {"lat_min": 25.268, "lat_max": 31.178, "lon_min": 37.207, "lon_max": 55.344}
+    },
+    {
+      "label": "D2",
+      "file": "n722bd_2026-11-01_florida.tar.gz",
+      "url": "https://s3.opensky-network.org/data-samples/incident-data/n722bd_2026-11-01_florida.tar.gz",
+      "bytes": 2043001,
+      "sha256": "276872b549d35482745afd9c388e634ff2b952a7a742684f37c60dc145ff0a13",
+      "retrieved": "2026-11-19",
+      "licence": "CC BY 4.0 + OpenSky terms",
+      "state_vectors": 7360,
+      "valid_reports": 7359,
+      "aircraft": 1,
+      "time_range_utc": ["2026-11-01T14:17:45Z", "2026-11-01T17:49:31Z"],
+      "area_deg": {"lat_min": 26.12, "lat_max": 30.352, "lon_min": -97.662, "lon_max": -80.098}
+    },
+    {
+      "label": "D3",
+      "file": "n931tt_2026-10-13_wisconsin.tar.gz",
+      "url": "https://s3.opensky-network.org/data-samples/incident-data/n931tt_2026-10-13_wisconsin.tar.gz",
+      "bytes": 1682485,
+      "sha256": "21795b7c1158c61ae50e7d3a889d006093a9804c8d0ebbc3b570927cbbd65326",
+      "retrieved": "2026-11-19",
+      "licence": "CC BY 4.0 + OpenSky terms",
+      "state_vectors": 5995,
+      "valid_reports": 5993,
+      "aircraft": 1,
+      "time_range_utc": ["2026-10-13T19:43:18Z", "2026-10-14T02:29:50Z"],
+      "area_deg": {"lat_min": 42.59, "lat_max": 44.891, "lon_min": -91.906, "lon_max": -87.917}
+    },
+    {
+      "label": "D4",
+      "file": "os82_2026-10-18_telaviv-sofia-vienna.tar.gz",
+      "url": "https://s3.opensky-network.org/data-samples/incident-data/os82_2026-10-18_telaviv-sofia-vienna.tar.gz",
+      "bytes": 3780786,
+      "sha256": "17864d08c2f2d14292ce8201ad17c0a28a38fb8a6ba7bf4f2512d20323fbc65a",
+      "retrieved": "2026-11-19",
+      "licence": "CC BY 4.0 + OpenSky terms",
+      "state_vectors": 15683,
+      "valid_reports": 15677,
+      "aircraft": 1,
+      "time_range_utc": ["2026-10-18T13:59:58Z", "2026-10-19T01:18:33Z"],
+      "area_deg": {"lat_min": 31.897, "lat_max": 48.119, "lon_min": 16.551, "lon_max": 35.166}
+    },
+    {
+      "label": "D5",
+      "file": "xauci_2025-01-31_philadelphia.tar.gz",
+      "url": "https://s3.opensky-network.org/data-samples/incident-data/xauci_2025-01-31_philadelphia.tar.gz",
+      "bytes": 2837012,
+      "sha256": "df6bac18263fe974df8ddfc2dfff5e77740fa5fa32184b7f2b1605025f3248c9",
+      "retrieved": "2026-11-19",
+      "licence": "CC BY 4.0 + OpenSky terms",
+      "state_vectors": 10143,
+      "valid_reports": 10122,
+      "aircraft": 1,
+      "time_range_utc": ["2025-01-30T23:59:58Z", "2025-01-31T23:07:03Z"],
+      "area_deg": {"lat_min": 19.852, "lat_max": 40.206, "lon_min": -81.433, "lon_max": -73.049}
+    }
+  ]
+}

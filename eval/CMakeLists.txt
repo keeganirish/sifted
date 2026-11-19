@@ -7,6 +7,7 @@
 add_library(sifted_eval_support STATIC
   sifted/eval/conditions.cpp
   sifted/eval/consistency.cpp
+  sifted/eval/realdata.cpp
   sifted/eval/scenario.cpp)
 add_library(sifted::eval_support ALIAS sifted_eval_support)
 target_include_directories(sifted_eval_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -21,4 +22,10 @@ if(SIFTED_BUILD_EVAL)
   target_link_libraries(sifted_eval PRIVATE sifted::eval_support sifted_options)
   target_compile_definitions(sifted_eval PRIVATE
     SIFTED_SCENARIO_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/scenarios")
+
+  # Real-data evaluation A (withheld ADS-B reports; docs/real-data-evaluation.md),
+  # driven by `python3 -m sifted_sim.realeval`, which also runs sifted_eval
+  # for evaluation B.
+  add_executable(sifted_realeval sifted_realeval.cpp)
+  target_link_libraries(sifted_realeval PRIVATE sifted::eval_support sifted_options)
 endif()

@@ -18,6 +18,7 @@ add_executable(sifted_tests
   live_reliability_test.cpp
   measurement_test.cpp
   multi_target_regression_test.cpp
+  realdata_test.cpp
   reorder_test.cpp
   scenario_regression_test.cpp
   sensor_table_test.cpp
@@ -46,4 +47,17 @@ endif()
 if(TARGET sifted_eval)
   add_dependencies(sifted_tests sifted_eval)
   target_compile_definitions(sifted_tests PRIVATE SIFTED_EVAL_BIN="$<TARGET_FILE:sifted_eval>")
+endif()
+
+# Real-data evaluation end to end (sim/tests/test_realeval.py EndToEnd): a
+# synthetic OpenSky-format archive through sifted_sim.realeval, sifted_realeval
+# and sifted_eval, twice, byte-identical. Offline; skipped by the plain Python
+# run above, which has no binaries.
+if(Python3_FOUND AND TARGET sifted_eval AND TARGET sifted_realeval)
+  add_dependencies(sifted_tests sifted_realeval)
+  add_test(NAME realdata_e2e_python
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tests.test_realeval.EndToEnd
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/sim")
+  set_tests_properties(realdata_e2e_python PROPERTIES ENVIRONMENT
+    "PYTHONPATH=${PROJECT_SOURCE_DIR}/sim;SIFTED_BIN_DIR=$<TARGET_FILE_DIR:sifted_realeval>")
 endif()

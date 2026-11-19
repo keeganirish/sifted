@@ -34,7 +34,10 @@
 // kMatchDistanceM = 100 m: about 5x the radar's raw position error at the
 // 8 km edge of coverage (sqrt(10^2 + (8000 * 0.0035)^2) ~ 30 m) once
 // filtered, yet below the 120 m lane spacing of close_pass, so a track cannot
-// be credited to the wrong lane.
+// be credited to the wrong lane. It is the default of a per-evaluation
+// parameter (Scorer, run_engine, run_pipeline; sifted_eval --match-distance):
+// another sensor geometry, such as the real-data evaluation's longer-range
+// radar (docs/real-data-evaluation.md), sizes it by the same rule.
 
 #include <cstddef>
 #include <cstdint>
@@ -143,7 +146,7 @@ struct Score {
 // Accumulates a Score over the truth instants of a scenario.
 class Scorer {
  public:
-  explicit Scorer(const std::vector<TruthRow>& truth);
+  explicit Scorer(const std::vector<TruthRow>& truth, double match_distance_m = kMatchDistanceM);
   // Truth instants, ascending.
   const std::vector<std::int64_t>& instants() const noexcept { return times_; }
   // Scores instant `i` (in order) from the engine's tracks extrapolated to it.
@@ -153,6 +156,7 @@ class Scorer {
 
  private:
   const std::vector<TruthRow>* truth_;
+  double match_m_;
   std::vector<std::int64_t> times_;
   std::vector<std::size_t> first_row_;  // per instant
   Score s_;
@@ -169,11 +173,12 @@ class Scorer {
 
 // Feeds the scenario's measurements straight into an Engine, scan by scan
 // (as the M2 regression test always did).
-Score run_engine(const Scenario& sc, const EngineConfig& cfg = {});
+Score run_engine(const Scenario& sc, const EngineConfig& cfg = {},
+                 double match_distance_m = kMatchDistanceM);
 
 // Same, with the measurement list replaced (fault injection).
 Score run_engine(const Scenario& sc, const std::vector<Measurement>& measurements,
-                 const EngineConfig& cfg = {});
+                 const EngineConfig& cfg = {}, double match_distance_m = kMatchDistanceM);
 
 // Feeds a sequence of arrivals through a net::Pipeline the way the live
 // daemon does: frames in arrival order with recv = arrival time, plus a tick
@@ -192,7 +197,8 @@ struct PipelineRun {
 };
 inline constexpr std::int64_t kDaemonTickNs = 100'000'000;
 PipelineRun run_pipeline(const Scenario& sc, const std::vector<net::ArrivingFrame>& arrivals,
-                         const net::PipelineConfig& cfg, std::int64_t tick_ns = kDaemonTickNs);
+                         const net::PipelineConfig& cfg, std::int64_t tick_ns = kDaemonTickNs,
+                         double match_distance_m = kMatchDistanceM);
 
 // Every frame of the scenario, sent at its measurement time.
 std::vector<net::SentFrame> sent_frames(const std::vector<Measurement>& measurements);
@@ -218,6 +224,18 @@ struct Recovery {
   std::map<int, bool> target_survived;             // per target considered
   std::map<int, std::int64_t> last_update_before;  // its track's last update before the outage
 };
+
+// The Associated trace events of `track` recorded since the engine had
+// recorded `read` of them, oldest first; `read` becomes the new total. Events
+// that rolled out of the track's trace window before they could be read are
+// added to `lost`. Shared by the NIS of Scorer and of the real-data
+// evaluation (realdata.hpp), so both read the engine's gating d^2 the same way.
+std::vector<store::TraceEvent> new_associated_events(const Engine& engine, TrackId track,
+                                                     std::uint64_t& read, std::size_t& lost);
+// Degrees of freedom of the chi-square gate an Associated event was compared
+// to: the dimension whose gate quantile reproduces `gate` exactly (same
+// function, same inputs). Throws std::runtime_error if none does.
+std::size_t gate_dof(const Engine& engine, double gate);
 
 // Largest change of a target's true velocity between two times [m/s]
 // (0 for a target flying straight and level through the interval).

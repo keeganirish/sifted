@@ -161,6 +161,43 @@ build/release/eval/sifted_eval --help                  # --scenarios, --seeds, -
 It shares its loading, scoring and condition definitions with the tests
 (`eval/sifted/eval/`, library `sifted_eval_support`); `Eval.*` checks the
 two agree. Regenerate the page after a change that moves a baseline.
+`--match-distance M` changes the scoring match distance for another sensor
+geometry; its default (100 m) leaves the page byte-identical
+(`Eval.DefaultMatchDistanceLeavesScorecardUnchanged`).
+
+### Real-data evaluation
+
+The tracker on recorded OpenSky ADS-B ([`real-data-evaluation.md`](real-data-evaluation.md)):
+real reports through the real decoder and engine, scored by withheld reports
+(evaluation A, `sifted_realeval`), and real flight paths observed by the
+simulated radar and camera (evaluation B, `sifted_eval` on generated scenario
+directories). Data acquisition is a separate, explicit step; everything after
+it is offline:
+
+```bash
+cmake --preset release && cmake --build --preset release
+cd sim
+python3 -m sifted_sim.realeval fetch   # ~11 MB into recordings/opensky-incident/raw/ (git-ignored), SHA-256 checked
+python3 -m sifted_sim.realeval run     # cached data -> docs/real-data-evaluation.md (about a minute)
+python3 -m sifted_sim.realeval run --help   # --manifest, --cache, --work (default build/realdata), --bin-dir, --out
+python3 -m sifted_sim.realeval describe ../recordings/opensky-incident/raw/*.tar.gz   # manifest fields
+python3 -m sifted_sim.statevectors FILE...  # reader counts for any state-vector CSV or archive
+```
+
+The datasets, their URLs, sizes, SHA-256, retrieval date, licence and
+descriptive fields are in [`eval/realdata/opensky-incident.json`](../eval/realdata/opensky-incident.json);
+`run` refuses a cached file whose size, hash or descriptive fields differ.
+Another OpenSky state-vector dataset (the Trino `state_vectors_data4` CSV, or
+the former `states_*.csv` dumps) only needs a manifest of its own and
+`--manifest`. No credentials are involved: the archives are public. Their
+terms forbid redistribution, so neither the archives nor anything derived
+from them is committed, and reports name aircraft by number only.
+
+Tests are offline: `sim/tests/test_realeval.py` and
+`sim/tests/test_statevectors_fuzz.py` (synthetic inputs), `RealData.*` in
+`tests/realdata_test.cpp`, and the ctest `realdata_e2e_python`, which runs the
+whole pipeline twice on a generated archive and compares the reports byte for
+byte.
 
 ### ADS-B (OpenSky)
 
@@ -232,10 +269,11 @@ tests/        unit tests, fixtures, ground-truth regression, degraded-network,
               fault-injection and UDP flood tests
 fuzz/         six libFuzzer targets and seed corpora
 benchmarks/   engine benchmark harness, end-to-end latency script, report generator
-eval/         shared ground-truth scoring library and the sifted_eval scorecard
+eval/         shared ground-truth scoring library, the sifted_eval scorecard, the
+              sifted_realeval real-data tool, realdata/ dataset manifest
 scripts/      demo runner, Windows installer
-docs/         design document, threat model, ADRs 0001-0011, benchmark report,
-              evaluation scorecard, demo runbook
+docs/         design document, threat model, ADRs 0001-0013, benchmark report,
+              evaluation scorecard, real-data evaluation, demo runbook
 cmake/        build options, sanitizers, dependencies
 ```
 

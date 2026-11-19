@@ -20,6 +20,7 @@
 | B3 | WebSocket clients → publisher | **Untrusted** (read-only subscribers; no commands accepted in v1). |
 | B4 | Event log file → replayer | Semi-trusted; still parsed with the same strict decoder. |
 | B5 | Sensor table file → `parse_sensor_table` | Trusted operator configuration (ADR 0003); still parsed strictly with size and count limits. Never accepted from the network. |
+| B6 | Downloaded OpenSky state-vector archives → real-data evaluation (`sim/sifted_sim/statevectors.py`) | **Untrusted.** Third-party files fetched over HTTPS for developer tooling only (never read by the daemon or the app). Pinned by SHA-256 in `eval/realdata/opensky-incident.json` before anything parses them. The run directories the tool then writes for `sifted_realeval` and `sifted_eval` are our own output, parsed strictly like the scenario fixtures. |
 
 ## Threats and mitigations
 
@@ -43,6 +44,8 @@
 | Spoofed source addresses defeat per-source limits | B1 | UDP source addresses are unauthenticated; a spoofer gets a fresh bucket per address. The bounded queue and its counter remain the backstop; the engine can never be stalled, only starved of input | accepted |
 | Forged ADS-B (spoofing) | B2 | Out of scope; cross-sensor consistency checks are a possible later feature | accepted |
 | Malformed OpenSky JSON crashes the adapter or yields invalid frames | B2 | adapter validates every field; property tests with random and mutated JSON (`sim/tests/test_adsb_fuzz.py`). M3 found and fixed one bug: a `time_position` whose nanosecond value overflows int64 passed validation and made `encode()` raise | **mitigated** |
+| Malformed, truncated or hostile state-vector archive | B6 | SHA-256 and size checked against the committed manifest before parsing; archives read member by member through `tarfile` streams, never extracted, members with absolute or `..` names skipped; caps on file size (1 GiB), line length (64 KiB) and rows (20 M); every row validated field by field with the live adapter's bounds and dropped with a counted reason; whole-file defects raise one clear error; property tests with random and mutated files (`sim/tests/test_statevectors_fuzz.py`), and every surviving report must encode to a frame the C++ decoder accepts | **mitigated** |
+| Aircraft identity leaks into the tracker or a published report | B6 | addresses become integer labels in scoring-only files; frames carry no identity and do not depend on it (`test_tracker_input_carries_no_identity`); reports print labels only | **mitigated** |
 | Malicious WebSocket client (bad handshake, data frames, floods) | B3 | strict handshake parser, read-only frame policy (control frames only, ≤ 125 bytes), request and frame size caps, client cap, stall timeout; both parsers fuzzed (`fuzz_websocket`) | **mitigated** |
 | Corrupt or hostile event log | B4 | size checks before allocation, CRCs, strict header parser (canonical round trip), time order; frames re-decoded; recovery forgives only a torn final record, and only when asked; fuzzed (`fuzz_event_log`, `fuzz_log_header`) | **mitigated** |
 | Malformed sensor table | B5 | strict parser with size and count caps; fuzzed (`fuzz_sensor_table`) | **mitigated** |

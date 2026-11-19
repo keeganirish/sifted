@@ -65,8 +65,11 @@ The full rules are in the [determinism contract](docs/design.md#3-determinism-co
 
 ## Engineering evidence
 
-Accuracy figures come from seeded simulator scenarios scored against ground
-truth. One command regenerates the [evaluation scorecard](docs/evaluation.md).
+Accuracy figures in this table come from seeded simulator scenarios scored
+against ground truth, where sensor noise matches the filter's assumptions
+exactly. One command regenerates the [evaluation scorecard](docs/evaluation.md).
+Measurements on recorded aircraft are kept apart, in
+[Real-data evaluation](#real-data-evaluation-recorded-ads-b) below.
 
 | Claim | Measured | Proof |
 |---|---|---|
@@ -94,6 +97,25 @@ commands to reproduce them.
 <p align="center">
   <img src="docs/benchmarks/scan_latency.png" alt="Log-log plot of p99 scan processing time against live tracks, with and without the gate screen, at three clutter levels, with the 100 ms budget marked" width="560">
 </p>
+
+### Real-data evaluation (recorded ADS-B)
+
+Separate from the simulator figures above: the tracker run on real OpenSky ADS-B
+state vectors (five published incident extracts, 16 flights of 5 aircraft after
+cleaning, 38,555 reports). The [real-data report](docs/real-data-evaluation.md)
+has the provenance, cleaning counts, method and every number below, all from
+held-out flights; one command regenerates it from the cached archives.
+
+| Question | Measured on held-out flights | Where |
+|---|---|---|
+| **Prediction.** Tracker estimate at withheld real reports, against dead reckoning from the last report's own velocity | Median 7.5 m vs 7.2 m at 2-5 s, 35.0 m vs 25.8 m at 20-40 s, 83.7 m vs 69.1 m at 40-80 s: **worse than dead reckoning** at every horizon up to 80 s | [Results A](docs/real-data-evaluation.md#results-a-real-measurements) |
+| **ADS-B noise model.** NIS of real updates with the assumed 50 m sigma | 0.13 against 2.00 expected: **inconsistent**, innovations 0.26x the predicted size. A measured 6.8 m sigma (diagnostic) predicts worse and fragments more (31 vs 0 breaks) | [Findings](docs/real-data-evaluation.md#findings) |
+| **Continuity.** One aircraft per run, launcher ADS-B settings | Every report at full rate: 0 fragmentations, 100% coverage. At the live 21.6 s REST cadence (5.4% of reports reach the tracker): 8 fragmentations, 97.5% coverage. With `EngineConfig` defaults: 42 fragmentations | [Consistency and continuity](docs/real-data-evaluation.md#consistency-and-continuity) |
+| **Real motion, simulated sensors.** Real flight paths as truth for the simulator's radar and camera | Per-window RMSE median 15.2 m, p95 36.6 m, against 13.4 m / 15.2 m on constant-velocity controls; real motion is 52% of the mean squared error; truth interpolation bound (leave-one-out p95) 27.4 m | [Results B](docs/real-data-evaluation.md#results-b-real-trajectories-simulated-sensors) |
+
+Not measured on real data: identity swaps and dense traffic (each extract holds one
+aircraft), altitude, and real radar or camera noise. The sample is small and biased
+towards unusual flights ([limitations](docs/real-data-evaluation.md#limitations)).
 
 ## Design decisions and tradeoffs
 
@@ -140,6 +162,10 @@ commands to reproduce them.
   expected value because the process noise budgets for manoeuvres. An honest
   straight-flight covariance needs an IMM
   ([design §7](docs/design.md#filter-consistency)).
+- **On real ADS-B the tracker predicts worse than dead reckoning.** It never sees
+  the aircraft's velocity reports, and its 50 m ADS-B sigma is inconsistent with
+  real reports (NIS 0.13), yet a measured sigma alone makes prediction worse
+  ([real-data findings](docs/real-data-evaluation.md#findings)).
 - **Frozen sensors are not detected.** A stuck radar produces stationary false
   tracks until it recovers
   ([threat model](docs/threat-model.md#sensor-and-input-faults)).
@@ -197,6 +223,12 @@ cmake --preset release && cmake --build --preset release
 build/release/eval/sifted_eval --out docs/evaluation.md
 ```
 
+Regenerate the real-data report (downloads about 11 MB once, verified by SHA-256):
+
+```bash
+cd sim && python3 -m sifted_sim.realeval fetch && python3 -m sifted_sim.realeval run
+```
+
 The [development guide](docs/development.md) covers dependencies, fuzzing,
 benchmarks, running each component by hand and the launcher's control API.
 
@@ -211,7 +243,7 @@ See [troubleshooting in the install guide](docs/install.md#troubleshooting).
 | [`src/sifted/`](src/sifted) | Core and network libraries: wire codec, estimation, association, track store, replay, ingest |
 | [`src/apps/`](src/apps) | `sifted_fusiond`, the fusion daemon (live and replay) |
 | [`tests/`](tests) | Unit, ground-truth regression, degraded-network, fault-injection and UDP flood tests |
-| [`eval/`](eval) | Shared ground-truth scoring library and the `sifted_eval` scorecard tool |
+| [`eval/`](eval) | Shared ground-truth scoring library, the `sifted_eval` scorecard tool, the `sifted_realeval` real-data tool and the real-data manifest |
 | [`fuzz/`](fuzz) | Six libFuzzer targets and their seed corpora |
 | [`benchmarks/`](benchmarks) | Engine benchmark harness, end-to-end latency script, report generator |
 | [`sim/`](sim) | Python sensor simulators, scenarios, fault injection, impairment proxy, OpenSky adapter |
@@ -229,7 +261,10 @@ See [troubleshooting in the install guide](docs/install.md#troubleshooting).
 ## Data sources and third-party software
 
 Live aircraft data comes from the [OpenSky Network](https://opensky-network.org/);
-its use is subject to the OpenSky Network's terms of use. Map tiles ©
+its use is subject to the OpenSky Network's terms of use. The real-data evaluation
+uses OpenSky's published incident extracts (CC BY 4.0 per their READMEs, and the
+OpenSky terms); they are downloaded, never committed, and cited as M. Schäfer et
+al., *Bringing up OpenSky*, IPSN 2014 ([provenance](docs/real-data-evaluation.md#provenance)). Map tiles ©
 [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors. The
 operator view bundles [Leaflet](https://leafletjs.com/) 1.9.4 (BSD 2-Clause,
 `web/vendor/leaflet/LICENSE`).
