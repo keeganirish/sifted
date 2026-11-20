@@ -12,6 +12,7 @@ add_executable(sifted_tests
   event_log_test.cpp
   degraded_network_test.cpp
   gate_screen_test.cpp
+  imm_test.cpp
   geodetic_test.cpp
   impairment_test.cpp
   ingest_test.cpp

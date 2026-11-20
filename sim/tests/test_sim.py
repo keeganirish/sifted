@@ -227,5 +227,37 @@ class GenerateTest(unittest.TestCase):
                                  len(fresh["truth.csv"].splitlines()))
 
 
+class ManoeuvreScenarioTest(unittest.TestCase):
+    """The parametric manoeuvre family and its Monte Carlo sets (ADR 0014)."""
+
+    def test_turn_has_the_requested_load_and_duration(self) -> None:
+        for g, v in ((0.3, 100.0), (5.0, 250.0)):
+            s = scenarios.manoeuvre(g, v, 101)
+            traj = s.targets[0].trajectory
+            straight1, turn, straight2 = traj.segments
+            rate = g * scenarios.G0_MPS2 / v
+            self.assertAlmostEqual(turn.rate_rad_s, -rate)  # right turn
+            self.assertAlmostEqual(turn.duration_s, min(math.pi / rate, 40.0))
+            self.assertEqual((straight1.duration_s, straight2.duration_s), (30.0, 30.0))
+            mid = traj.state_at(30.0 + turn.duration_s / 2)
+            self.assertAlmostEqual(math.hypot(mid.vx_mps, mid.vy_mps), v)  # constant speed
+            r = s.radars[0]
+            self.assertEqual((r.max_range_m, r.p_detect, r.clutter_per_scan, r.seed),
+                             (60000.0, 0.9, 0.5, 101))
+
+    def test_sets_use_disjoint_seeds_and_profiles(self) -> None:
+        from sifted_sim import manoeuvres
+        self.assertFalse(set(manoeuvres.EVALUATION_SEEDS) & set(manoeuvres.TUNING_SEEDS))
+        self.assertFalse(set(manoeuvres.EVALUATION_LOADS) & set(manoeuvres.TUNING_LOADS))
+        names = [n for n, _ in manoeuvres.evaluation_set()]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertIn("manoeuvre_3g_250mps_s101", names)
+        reseeded = manoeuvres.reseeded_set()
+        base = scenarios.formation_split().radars[0].seed
+        seeds = {s.radars[0].seed for n, s in reseeded if n.startswith("formation_split_")}
+        self.assertNotIn(base, seeds)
+        self.assertEqual(len(seeds), len(manoeuvres.RESEEDED_SEEDS))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -62,12 +63,19 @@ bool is_valid(const ManoeuvreConfig& m) noexcept {
          std::isfinite(m.accel_psd_factor);
 }
 
+bool is_valid(const ImmConfig& c) noexcept {
+  return estimation::is_valid(c.model) && c.manoeuvre_off > 0.0 &&
+         c.manoeuvre_off < c.manoeuvre_on && c.manoeuvre_on < 1.0;
+}
+
 }  // namespace
 
 bool is_valid(const EngineConfig& c) noexcept {
   const double p = c.association.gate_probability;
-  return c.accel_psd >= 0.0 && std::isfinite(c.accel_psd) && is_valid(c.manoeuvre) &&
-         std::isfinite(c.accel_psd * c.manoeuvre.accel_psd_factor) &&
+  return (c.motion_model == estimation::MotionModel::ConstantVelocity ||
+          c.motion_model == estimation::MotionModel::Imm) &&
+         is_valid(c.imm) && c.accel_psd >= 0.0 && std::isfinite(c.accel_psd) &&
+         is_valid(c.manoeuvre) && std::isfinite(c.accel_psd * c.manoeuvre.accel_psd_factor) &&
          positive_finite(c.initial_velocity_sigma) && p > 0.0 && p < 1.0 &&
          c.association.near_miss_factor >= 1.0 && std::isfinite(c.association.near_miss_factor) &&
          (c.association.method == association::AssignmentMethod::GlobalNearestNeighbour ||
@@ -136,7 +144,7 @@ Engine::LifecycleVerdict Engine::lifecycle_at(const TrackRecord& r, Timestamp t)
     v.drop = association::DropReason::Stale;
   }
   if (v.drop == association::DropReason::None) {
-    estimation::ConstantVelocityFilter f = r.filter;
+    estimation::TrackFilter f = r.filter;
     if (f.predict(seconds_between(r.time, t)) != FilterStatus::Ok ||
         !(max_position_variance(f.covariance()) <= max_var)) {
       v.drop = association::DropReason::Uncertainty;
@@ -258,10 +266,10 @@ void Engine::process_group(std::span<const Measurement> group,
 
     // ---- 3. gating ------------------------------------------------------
     std::vector<TrackRecord>& live = store_.live();
-    std::vector<std::optional<estimation::ConstantVelocityFilter>> predicted;
+    std::vector<std::optional<estimation::TrackFilter>> predicted;
     predicted.reserve(live.size());
     for (const TrackRecord& r : live) {
-      estimation::ConstantVelocityFilter f = r.filter;
+      estimation::TrackFilter f = r.filter;
       if (f.predict(seconds_between(r.time, t)) == FilterStatus::Ok) {
         predicted.emplace_back(f);
       } else {
@@ -270,14 +278,25 @@ void Engine::process_group(std::span<const Measurement> group,
     }
 
     const double near_factor = config_.association.near_miss_factor;
-    // Per-track inputs of the gate screen, computed once per group.
+    // Per-track inputs of the gate screen, computed once per group: the
+    // predicted position and its largest variance for each Gaussian component
+    // of the track (one, or one per IMM mode). The gate statistic is the
+    // smallest d^2 over the components, so a pair may gate iff some component
+    // may (estimation::may_gate, ADR 0014).
+    constexpr std::size_t kMaxComponents = estimation::kImmModes;
     const bool screen = config_.association.gate_screen;
-    std::vector<double> lambda(screen ? live.size() : 0, 0.0);
-    std::vector<Eigen::Vector2d> predicted_pos(screen ? live.size() : 0, Eigen::Vector2d::Zero());
+    const std::size_t slots = screen ? live.size() * kMaxComponents : 0;
+    std::vector<double> lambda(slots, 0.0);
+    std::vector<Eigen::Vector2d> predicted_pos(slots, Eigen::Vector2d::Zero());
+    std::vector<std::size_t> components(screen ? live.size() : 0, 0);
     for (std::size_t k = 0; screen && k < live.size(); ++k) {
       if (predicted[k]) {
-        lambda[k] = max_position_variance(predicted[k]->covariance());
-        predicted_pos[k] = predicted[k]->state().head<2>();
+        components[k] = predicted[k]->components();
+        for (std::size_t c = 0; c < components[k]; ++c) {
+          lambda[k * kMaxComponents + c] =
+              max_position_variance(predicted[k]->component_covariance(c));
+          predicted_pos[k * kMaxComponents + c] = predicted[k]->component_state(c).head<2>();
+        }
       }
     }
     std::vector<Candidate> candidates;
@@ -291,20 +310,23 @@ void Engine::process_group(std::span<const Measurement> group,
         if (!predicted[k]) {
           continue;
         }
-        if (screen && !estimation::may_gate(gs, predicted_pos[k], lambda[k], limit)) {
+        if (screen) {
+          bool may = false;
+          for (std::size_t c = 0; c < components[k] && !may; ++c) {
+            may = estimation::may_gate(gs, predicted_pos[k * kMaxComponents + c],
+                                       lambda[k * kMaxComponents + c], limit);
+          }
+          if (!may) {
+            continue;
+          }
+        }
+        auto gated = predicted[k]->gate(accepted[j].ctx);
+        if (!gated) {
           continue;
         }
-        auto lin = estimation::linearize(accepted[j].ctx, predicted[k]->state());
-        if (!lin) {
-          continue;
-        }
-        const auto d2 = estimation::mahalanobis2(*predicted[k], *lin);
-        if (!d2) {
-          continue;
-        }
-        const double g = gate(estimation::dimension(*lin));
-        if (*d2 <= near_factor * g) {
-          candidates.push_back({j, k, *d2, *d2 <= g, *lin});
+        const double g = gate(estimation::dimension(gated->lin));
+        if (gated->d2 <= near_factor * g) {
+          candidates.push_back({j, k, gated->d2, gated->d2 <= g, gated->lin});
         }
       }
     }
@@ -411,9 +433,18 @@ void Engine::process_group(std::span<const Measurement> group,
       e.seq = m.seq;
       e.distance2 = cd.d2;
       e.gate = gate(estimation::dimension(cd.lin));
+      // NIS under the track estimate. The constant-velocity filter gates on
+      // exactly that; the IMM gates on its best mode, so its NIS is computed
+      // under the combined prediction.
+      e.nis = cd.d2;
+      if (predicted[k]->model() == estimation::MotionModel::Imm) {
+        const auto at = estimation::linearize(accepted[j].ctx, predicted[k]->state());
+        const auto nis = at ? predicted[k]->mahalanobis2(*at) : std::nullopt;
+        e.nis = nis.value_or(std::numeric_limits<double>::quiet_NaN());
+      }
 
-      estimation::ConstantVelocityFilter f = *predicted[k];
-      if (estimation::apply(f, cd.lin) != FilterStatus::Ok) {
+      estimation::TrackFilter f = *predicted[k];
+      if (f.update(accepted[j].ctx, cd.lin) != FilterStatus::Ok) {
         res.outcome = MeasurementOutcome::FilterRejected;
         e.kind = TraceEventKind::UpdateRejected;
         store_.record(r, e);
@@ -449,6 +480,7 @@ void Engine::process_group(std::span<const Measurement> group,
         c.time = t;
         store_.record(r, c);
       }
+      update_mode_indication(r, t);
     }
 
     // ---- 5b. trace the alternatives each track saw -----------------------
@@ -498,11 +530,18 @@ void Engine::process_group(std::span<const Measurement> group,
       const double v_var = config_.initial_velocity_sigma * config_.initial_velocity_sigma;
       P0(2, 2) = v_var;
       P0(3, 3) = v_var;
-      auto created = estimation::ConstantVelocityFilter::create(x0, P0, config_.accel_psd);
+      std::optional<estimation::TrackFilter> created;
+      if (config_.motion_model == estimation::MotionModel::Imm) {
+        if (auto f = estimation::ImmFilter::create(x0, P0, config_.imm.model)) {
+          created.emplace(f.value());
+        }
+      } else if (auto f = estimation::ConstantVelocityFilter::create(x0, P0, config_.accel_psd)) {
+        created.emplace(f.value());
+      }
       if (!created) {
         continue;  // e.g. zero range: degenerate covariance
       }
-      TrackRecord r(next_track_id_++, created.value(), t, store_.config());
+      TrackRecord r(next_track_id_++, *created, t, store_.config());
       r.updates = 1;
       r.position_hits = 1;
       r.last_sensor = m.sensor_id;
@@ -546,7 +585,7 @@ void Engine::process_group(std::span<const Measurement> group,
 
 void Engine::update_manoeuvre(TrackRecord& r, double d2, Timestamp t) {
   const ManoeuvreConfig& mc = config_.manoeuvre;
-  if (mc.accel_psd_factor == 1.0) {
+  if (mc.accel_psd_factor == 1.0 || r.filter.model() != estimation::MotionModel::ConstantVelocity) {
     return;
   }
   r.nis_average = mc.fading * r.nis_average + d2;
@@ -565,6 +604,27 @@ void Engine::update_manoeuvre(TrackRecord& r, double d2, Timestamp t) {
   store_.record(r, e);
 }
 
+void Engine::update_mode_indication(TrackRecord& r, Timestamp t) {
+  const estimation::ImmFilter* imm = r.filter.imm();
+  if (imm == nullptr || r.status == TrackStatus::Tentative) {
+    return;
+  }
+  const ImmConfig& ic = config_.imm;
+  const double p = 1.0 - imm->probabilities()(0);
+  const bool start = !r.manoeuvring && p > ic.manoeuvre_on;
+  const bool end = r.manoeuvring && p < ic.manoeuvre_off;
+  if (!start && !end) {
+    return;
+  }
+  r.manoeuvring = start;
+  TraceEvent e;
+  e.kind = start ? TraceEventKind::ManoeuvreLikely : TraceEventKind::ManoeuvreUnlikely;
+  e.time = t;
+  e.distance2 = p;
+  e.gate = start ? ic.manoeuvre_on : ic.manoeuvre_off;
+  store_.record(r, e);
+}
+
 TrackEstimate Engine::estimate_of(const TrackRecord& r) const {
   TrackEstimate e;
   e.id = r.id;
@@ -577,6 +637,9 @@ TrackEstimate Engine::estimate_of(const TrackRecord& r) const {
   e.updates = r.updates;
   e.last_sensor = r.last_sensor;
   e.manoeuvring = r.manoeuvring;
+  if (const estimation::ImmFilter* imm = r.filter.imm()) {
+    e.mode_probabilities = imm->probabilities();
+  }
   e.trace_total = r.recent.pushed();
   e.sensors.reserve(r.sensors.size());
   for (const store::SensorContribution& c : r.sensors) {
@@ -608,7 +671,7 @@ std::optional<TrackEstimate> Engine::track_at(TrackId id, Timestamp t,
   if (r == nullptr || t < r->time) {
     return std::nullopt;
   }
-  estimation::ConstantVelocityFilter f = r->filter;
+  estimation::TrackFilter f = r->filter;
   if (f.predict(seconds_between(r->time, t)) != FilterStatus::Ok) {
     return std::nullopt;
   }
@@ -616,6 +679,9 @@ std::optional<TrackEstimate> Engine::track_at(TrackId id, Timestamp t,
   e.time = t;
   e.state = f.state();
   e.covariance = f.covariance();
+  if (const estimation::ImmFilter* imm = f.imm()) {
+    e.mode_probabilities = imm->probabilities();  // predicted to t
+  }
   const std::size_t kept = r->recent.size();
   const std::size_t n = std::min(trace_events, kept);
   e.trace.reserve(n);

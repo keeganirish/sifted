@@ -89,6 +89,59 @@ TEST(EventLog, RecordsTheSnapshotTraceLengthAndReadsOlderHeadersWithoutIt) {
   EXPECT_FALSE(parse_header(excessive).ok());
 }
 
+// ADR 0014: the motion model and every IMM parameter are recorded and read back.
+TEST(EventLog, RecordsTheMotionModelAndImmParameters) {
+  RunHeader h = sample_header();
+  h.config.engine.motion_model = estimation::MotionModel::Imm;
+  h.config.engine.imm.model.accel_psd = {0.25, 30.0, 900.0};
+  h.config.engine.imm.model.sojourn_s = {90.0, 20.0, 12.5};
+  h.config.engine.imm.model.probability_floor = 1e-5;
+  h.config.engine.imm.manoeuvre_on = 0.75;
+  h.config.engine.imm.manoeuvre_off = 0.3;
+  const std::string text = format_header(h);
+  for (const char* line : {"param motion_model imm\n", "param imm_accel_psd_quiet 0.25\n",
+                           "param imm_accel_psd_manoeuvre 30\n", "param imm_accel_psd_hard 900\n",
+                           "param imm_sojourn_quiet_s 90\n", "param imm_sojourn_manoeuvre_s 20\n",
+                           "param imm_sojourn_hard_s 12.5\n", "param imm_probability_floor 1e-05\n",
+                           "param imm_manoeuvre_on 0.75\n", "param imm_manoeuvre_off 0.3\n"}) {
+    EXPECT_NE(text.find(line), std::string::npos) << line;
+  }
+  const auto back = parse_header(text);
+  ASSERT_TRUE(back.ok());
+  EXPECT_TRUE(back.value() == h);
+  // Invalid values are refused like any other parameter.
+  std::string bad = text;
+  bad.replace(bad.find("param motion_model imm"), 22, "param motion_model ct");
+  EXPECT_FALSE(parse_header(bad).ok());
+  bad = text;
+  bad.replace(bad.find("param imm_manoeuvre_off 0.3"), 27, "param imm_manoeuvre_off 0.9");
+  EXPECT_FALSE(parse_header(bad).ok());  // off must be below on
+}
+
+// A recording made before the IMM existed has none of the new parameters. It
+// must replay with the constant-velocity filter it was recorded with, even
+// though the IMM is now the default: the header resolves to exactly the
+// configuration of that run, and the pipeline is a pure function of it
+// (Replay.RecordedLegacyRunReplaysBitForBit covers the bytes).
+TEST(EventLog, OlderHeadersWithoutAMotionModelReplayWithTheLegacyFilter) {
+  ASSERT_EQ(EngineConfig{}.motion_model, estimation::MotionModel::Imm);
+  RunHeader h = sample_header();
+  h.config.engine.motion_model = estimation::MotionModel::ConstantVelocity;
+  std::string older;
+  std::istringstream lines(format_header(h));
+  for (std::string line; std::getline(lines, line);) {
+    if (line.rfind("param motion_model ", 0) != 0 && line.rfind("param imm_", 0) != 0) {
+      older += line + "\n";
+    }
+  }
+  ASSERT_EQ(older.find("motion_model"), std::string::npos);
+  ASSERT_EQ(older.find("imm_"), std::string::npos);
+  const auto old = parse_header(older);
+  ASSERT_TRUE(old.ok());
+  EXPECT_EQ(old.value().config.engine.motion_model, estimation::MotionModel::ConstantVelocity);
+  EXPECT_TRUE(old.value() == h);  // every other parameter as recorded
+}
+
 TEST(EventLog, HeaderIsStrict) {
   const std::string good = format_header(sample_header());
   auto bad = [](std::string s) { return !parse_header(s).ok(); };
@@ -199,11 +252,12 @@ TEST(EventLog, ReaderRejectsCorruption) {
 // The headline determinism property: record a run through the live-side path
 // (pipeline + writer, with ticks, a duplicate and a corrupt frame mixed in),
 // replay the log through a fresh pipeline, and compare the output bytes.
-TEST(Replay, RecordedRunReplaysBitForBit) {
+void check_replay(estimation::MotionModel model) {
   const std::string dir = std::string(SIFTED_FIXTURE_DIR) + "/scenarios/crossing_pair/";
   const auto table = parse_sensor_table(read_fixture_file(dir + "sensors.cfg"));
   ASSERT_TRUE(table.ok());
   RunHeader header{table.value(), {}};
+  header.config.engine.motion_model = model;
   header.config.engine.origin = estimation::GeoOrigin{51.4779, -0.0015, 0.0};
 
   std::vector<std::vector<std::uint8_t>> frames;
@@ -263,6 +317,11 @@ TEST(Replay, RecordedRunReplaysBitForBit) {
   EXPECT_NE(live_out.find("\nd "), std::string::npos);  // duplicates were exercised
   EXPECT_NE(live_out.find("\nx "), std::string::npos);  // decode errors were exercised
   EXPECT_NE(live_out.find("\ns {\"type\":\"sifted.tracks\""), std::string::npos);
+}
+
+TEST(Replay, RecordedRunReplaysBitForBit) { check_replay(estimation::MotionModel::Imm); }
+TEST(Replay, RecordedLegacyRunReplaysBitForBit) {
+  check_replay(estimation::MotionModel::ConstantVelocity);
 }
 
 }  // namespace sifted::replay

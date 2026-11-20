@@ -188,6 +188,7 @@ void Scorer::score(std::size_t i, const Engine& engine) {
   rec.time_ns = t;
   std::vector<char> matched_track(reported.size(), 0);
   std::vector<char> nis_scored(reported.size(), 0);  // matched to a target past burn-in
+  std::vector<int> scored_target(reported.size(), 0);
   for (std::size_t a = 0; a < now.size(); ++a) {
     const int tgt = now[a].target;
     rec.covered[tgt] = now[a].covered;
@@ -214,6 +215,7 @@ void Scorer::score(std::size_t i, const Engine& engine) {
     if (match[a] != association::kUnassigned && age >= kRmseBurnInS) {
       const TrackEstimate& e = reported[static_cast<std::size_t>(match[a])];
       sq_[tgt] += std::pow(e.state(0) - now[a].x, 2) + std::pow(e.state(1) - now[a].y, 2);
+      vel_sq_[tgt] += std::pow(e.state(2) - now[a].vx, 2) + std::pow(e.state(3) - now[a].vy, 2);
       ++s_.rmse_n[tgt];
 
       // Consistency: same samples as the RMSE.
@@ -230,13 +232,16 @@ void Scorer::score(std::size_t i, const Engine& engine) {
         st.full.add(full, static_cast<std::size_t>(err.size()));
         st.position.add(pos, 2);
       }
+      rec.nees[tgt] = full;
       nis_scored[static_cast<std::size_t>(match[a])] = 1;
+      scored_target[static_cast<std::size_t>(match[a])] = tgt;
     }
   }
   // Tracks not matched at a scored target-instant still have their trace read,
   // so their earlier updates are not credited to a later match.
   for (std::size_t j = 0; j < reported.size(); ++j) {
-    collect_nis(engine, reported[j].id, nis_scored[j] != 0);
+    const bool scored = nis_scored[j] != 0;
+    collect_nis(engine, reported[j].id, scored, scored ? &rec.nis[scored_target[j]] : nullptr);
   }
   for (std::size_t j = 0; j < reported.size(); ++j) {
     auto& c = track_counts_[reported[j].id];
@@ -247,7 +252,7 @@ void Scorer::score(std::size_t i, const Engine& engine) {
   s_.instants.push_back(std::move(rec));
 }
 
-void Scorer::collect_nis(const Engine& engine, TrackId track, bool score) {
+void Scorer::collect_nis(const Engine& engine, TrackId track, bool score, ChiSquareStat* instant) {
   if (engine.store().find(track) == nullptr) {
     return;
   }
@@ -265,7 +270,13 @@ void Scorer::collect_nis(const Engine& engine, TrackId track, bool score) {
     if (inserted) {
       dof_it->second = gate_dof(engine, e.gate);
     }
-    s_.nis[engine.sensors().sensors()[*idx].kind].add(e.distance2, dof_it->second);
+    // The NIS under the track estimate (TraceEvent::nis; the gating d^2 for the
+    // constant-velocity filter).
+    const double nis = std::isnan(e.nis) ? e.distance2 : e.nis;
+    s_.nis[engine.sensors().sensors()[*idx].kind].add(nis, dof_it->second);
+    if (instant != nullptr) {
+      instant->add(nis, dof_it->second);
+    }
   }
 }
 
@@ -307,6 +318,10 @@ Score Scorer::finish(const Engine& engine) {
     s.rmse[tgt] = std::sqrt(sum / static_cast<double>(s.rmse_n[tgt]));
     s.mean_rmse += s.rmse[tgt] / static_cast<double>(sq_.size());
     s.max_rmse = std::max(s.max_rmse, s.rmse[tgt]);
+  }
+  for (const auto& [tgt, sum] : vel_sq_) {
+    s.velocity_rmse[tgt] = std::sqrt(sum / static_cast<double>(s.rmse_n[tgt]));
+    s.mean_velocity_rmse += s.velocity_rmse[tgt] / static_cast<double>(vel_sq_.size());
   }
   for (const auto& [id, c] : track_counts_) {
     if (2 * c.second < c.first) {

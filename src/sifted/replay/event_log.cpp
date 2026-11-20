@@ -47,16 +47,40 @@ bool parse_num(std::string_view s, T& out) noexcept {
 // `optional` marks parameters added after the first recordings were made
 // (M3): a header without them is read with their defaults, which reproduce
 // the earlier behaviour exactly, so older logs still replay. Writers always
-// record every parameter.
+// record every parameter. When the library default is no longer the earlier
+// behaviour, `if_absent` sets that behaviour explicitly instead (motion_model:
+// a log without it was recorded with the constant-velocity filter, whatever
+// EngineConfig defaults to now).
 struct Param {
   std::string_view key;
   std::function<std::string(const net::PipelineConfig&)> get;
   std::function<bool(net::PipelineConfig&, std::string_view)> set;
   bool optional = false;
+  std::function<void(net::PipelineConfig&)> if_absent;
 };
 
 Param added_later(Param p) {
   p.optional = true;
+  return p;
+}
+
+// ADR 0014. Absent from every log recorded before the IMM existed, and those
+// runs used the constant-velocity filter.
+Param motion_model() {
+  using estimation::MotionModel;
+  Param p{"motion_model",
+          [](const net::PipelineConfig& c) {
+            return std::string(estimation::to_string(c.engine.motion_model));
+          },
+          [](net::PipelineConfig& c, std::string_view v) {
+            const auto m = estimation::motion_model_from_string(v);
+            if (m) {
+              c.engine.motion_model = *m;
+            }
+            return m.has_value();
+          },
+          true,
+          [](net::PipelineConfig& c) { c.engine.motion_model = MotionModel::ConstantVelocity; }};
   return p;
 }
 
@@ -76,7 +100,8 @@ Param assignment_method() {
         }
         return false;
       },
-      true};
+      true,
+      {}};
 }
 
 Param dbl(std::string_view key, std::function<double&(net::PipelineConfig&)> ref) {
@@ -84,7 +109,9 @@ Param dbl(std::string_view key, std::function<double&(net::PipelineConfig&)> ref
           [ref](const net::PipelineConfig& c) {
             return fmt(ref(const_cast<net::PipelineConfig&>(c)));  // NOLINT(*-const-cast)
           },
-          [ref](net::PipelineConfig& c, std::string_view v) { return parse_num(v, ref(c)); }};
+          [ref](net::PipelineConfig& c, std::string_view v) { return parse_num(v, ref(c)); },
+          false,
+          {}};
 }
 
 template <class U>
@@ -94,7 +121,9 @@ Param uns(std::string_view key, std::function<U&(net::PipelineConfig&)> ref) {
       [ref](const net::PipelineConfig& c) {
         return std::to_string(ref(const_cast<net::PipelineConfig&>(c)));  // NOLINT(*-const-cast)
       },
-      [ref](net::PipelineConfig& c, std::string_view v) { return parse_num(v, ref(c)); }};
+      [ref](net::PipelineConfig& c, std::string_view v) { return parse_num(v, ref(c)); },
+      false,
+      {}};
 }
 
 const std::vector<Param>& params() {
@@ -149,6 +178,27 @@ const std::vector<Param>& params() {
       added_later(dbl("timeline_confirm_s", [](C& c) -> double& { return c.timeline_confirm_s; })),
       added_later(dbl("feed_stale_factor", [](C& c) -> double& { return c.feed_stale_factor; })),
       added_later(dbl("feed_stale_min_s", [](C& c) -> double& { return c.feed_stale_min_s; })),
+      // ADR 0014. A log without motion_model is a constant-velocity run, for
+      // which the IMM parameters below have no effect.
+      motion_model(),
+      added_later(dbl("imm_accel_psd_quiet",
+                      [](C& c) -> double& { return c.engine.imm.model.accel_psd[0]; })),
+      added_later(dbl("imm_accel_psd_manoeuvre",
+                      [](C& c) -> double& { return c.engine.imm.model.accel_psd[1]; })),
+      added_later(dbl("imm_accel_psd_hard",
+                      [](C& c) -> double& { return c.engine.imm.model.accel_psd[2]; })),
+      added_later(dbl("imm_sojourn_quiet_s",
+                      [](C& c) -> double& { return c.engine.imm.model.sojourn_s[0]; })),
+      added_later(dbl("imm_sojourn_manoeuvre_s",
+                      [](C& c) -> double& { return c.engine.imm.model.sojourn_s[1]; })),
+      added_later(dbl("imm_sojourn_hard_s",
+                      [](C& c) -> double& { return c.engine.imm.model.sojourn_s[2]; })),
+      added_later(dbl("imm_probability_floor",
+                      [](C& c) -> double& { return c.engine.imm.model.probability_floor; })),
+      added_later(
+          dbl("imm_manoeuvre_on", [](C& c) -> double& { return c.engine.imm.manoeuvre_on; })),
+      added_later(
+          dbl("imm_manoeuvre_off", [](C& c) -> double& { return c.engine.imm.manoeuvre_off; })),
   };
   return p;
 }
@@ -251,6 +301,9 @@ Result<RunHeader, LogError> parse_header(std::string_view text) {
       for (std::size_t i = 0; i < seen.size(); ++i) {
         if (seen[i] == 0 && !params()[i].optional) {
           return LogError::BadHeader;  // a required parameter is missing
+        }
+        if (seen[i] == 0 && params()[i].if_absent) {
+          params()[i].if_absent(h.config);
         }
       }
       if (!net::is_valid(h.config)) {

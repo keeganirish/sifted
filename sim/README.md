@@ -11,6 +11,7 @@ Sensor simulators and scenario generators (Python, standard library only for now
 | `sensors` | sensor table writer/reader (`sifted-sensors 1`, ADR 0003) |
 | `scenarios` | named, reproducible scenarios: single-target `straight_crossing`, `turn`; multi-target `crossing_pair`, `close_pass`, `enter_leave`, `formation_split` (GNN vs greedy, M3), `demo` (docs/demo.md) |
 | `generate` | CLI that writes a scenario's `sensors.cfg`, `frames.hex`, `truth.csv` |
+| `manoeuvres` | writes Monte Carlo sets of the parametric `manoeuvre(load_g, speed, seed)` scenario (evaluation and tuning sets) and re-seeded copies of the fixtures, into the build directory, for `sifted_motion_eval` (ADR 0014) |
 | `send` | sends a scenario's frames to `sifted_fusiond` over UDP, real time or accelerated, optionally with injected sensor faults (`--fault`) |
 | `impair` | the degraded-network model (ADR 0008; exact mirror of `src/sifted/net/impairment.hpp`) and a live UDP impairment proxy |
 | `faults` | seeded sensor faults: dropout, intermittent, restart, clock offset/drift, bias, stuck (M3) |

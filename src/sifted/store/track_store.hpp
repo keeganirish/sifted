@@ -13,7 +13,7 @@
 #include "sifted/association/lifecycle.hpp"
 #include "sifted/core/outcome.hpp"
 #include "sifted/core/types.hpp"
-#include "sifted/estimation/cv_filter.hpp"
+#include "sifted/estimation/track_filter.hpp"
 #include "sifted/store/ring.hpp"
 
 // The track table and the decision trace behind every track.
@@ -44,8 +44,12 @@ enum class TraceEventKind : std::uint8_t {
   Dropped,
   ManoeuvreStart,  // innovation statistic exceeded its threshold: process noise raised
   ManoeuvreEnd,    // innovations consistent again: nominal process noise restored
+  // IMM (ADR 0014): the probability of the manoeuvre modes rose above / fell
+  // below its threshold (ImmConfig). Indication only: the estimate is unchanged.
+  ManoeuvreLikely,
+  ManoeuvreUnlikely,
 };
-inline constexpr std::size_t kTraceEventKindCount = 11;
+inline constexpr std::size_t kTraceEventKindCount = 13;
 
 std::string_view to_string(TraceEventKind k) noexcept;
 
@@ -54,10 +58,17 @@ struct TraceEvent {
   Timestamp time{};
   SensorId sensor = 0;  // measurement events only
   std::uint32_t seq = 0;
-  // Gating statistic and the gate it was compared to (measurement events), or
-  // the fading-memory innovation statistic and its threshold (manoeuvre events).
+  // Gating statistic and the gate it was compared to (measurement events), the
+  // fading-memory innovation statistic and its threshold (ManoeuvreStart/End),
+  // or the manoeuvre-mode probability and its threshold (ManoeuvreLikely/Unlikely).
   double distance2 = std::numeric_limits<double>::quiet_NaN();
   double gate = std::numeric_limits<double>::quiet_NaN();
+  // Associated / UpdateRejected: the normalised innovation squared of the
+  // measurement under the track estimate (filter consistency, eval NIS). Equal
+  // to distance2 for the constant-velocity filter; for the IMM, whose gate is
+  // its best mode (ADR 0014), the d^2 under the combined prediction. Not part
+  // of the snapshot or the text trace.
+  double nis = std::numeric_limits<double>::quiet_NaN();
   TrackId other = 0;  // Competed: the track that got the measurement (0: none)
   association::DropReason drop_reason = association::DropReason::None;
 };
@@ -83,6 +94,9 @@ struct SensorContribution {
 struct TrackRecord {
   TrackRecord(TrackId track_id, const estimation::ConstantVelocityFilter& f, Timestamp t,
               const TraceConfig& cfg)
+      : TrackRecord(track_id, estimation::TrackFilter(f), t, cfg) {}
+  TrackRecord(TrackId track_id, const estimation::TrackFilter& f, Timestamp t,
+              const TraceConfig& cfg)
       : id(track_id),
         filter(f),
         created(t),
@@ -92,7 +106,7 @@ struct TrackRecord {
 
   TrackId id;
   association::TrackStatus status = association::TrackStatus::Tentative;
-  estimation::ConstantVelocityFilter filter;
+  estimation::TrackFilter filter;
   Timestamp created;
   Timestamp time;  // time of the last applied measurement (the filter's time)
   // Time of the last position-observing update. The lifecycle timers run from
@@ -106,7 +120,8 @@ struct TrackRecord {
   std::uint64_t sensors_omitted = 0;        // updates from sensors beyond the bound
   association::DropReason drop_reason = association::DropReason::None;
   Timestamp dropped_at{};
-  // Manoeuvre detector: fading-memory sum of position-observing NIS values.
+  // Legacy manoeuvre detector: fading-memory sum of position-observing NIS
+  // values. `manoeuvring` is its state, or the IMM's manoeuvre indication.
   double nis_average = 0.0;
   bool manoeuvring = false;
 

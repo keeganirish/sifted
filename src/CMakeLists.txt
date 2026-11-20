@@ -14,8 +14,10 @@ add_library(sifted_core STATIC
   sifted/estimation/bearing_only.cpp
   sifted/estimation/cv_filter.cpp
   sifted/estimation/geodetic.cpp
+  sifted/estimation/imm_filter.cpp
   sifted/estimation/measurement_model.cpp
   sifted/estimation/range_bearing.cpp
+  sifted/estimation/track_filter.cpp
   sifted/net/dedup.cpp
   sifted/net/impairment.cpp
   sifted/net/ingest.cpp

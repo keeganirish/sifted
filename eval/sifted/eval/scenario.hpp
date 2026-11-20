@@ -87,6 +87,12 @@ struct InstantRecord {
   std::map<int, TrackId> match;
   std::map<int, std::int64_t> updated;  // last update time of the matched track
   std::map<int, bool> covered;
+  // Per target scored for RMSE at this instant (covered, matched, past
+  // kRmseBurnInS): its 4-dof NEES, and the NIS of the matched track's
+  // associated updates read at this instant (see Score::nis). Lets callers
+  // split consistency by flight phase (sifted_motion_eval).
+  std::map<int, double> nees;
+  std::map<int, ChiSquareStat> nis;
 };
 
 // Filter consistency (consistency.hpp), over the same matched target-instants
@@ -124,6 +130,9 @@ struct Score {
   std::size_t bearings_associated = 0;  // ... that updated a track
   double mean_rmse = 0.0;               // over targets
   double max_rmse = 0.0;
+  // Velocity RMSE [m/s], over the same target-instants as the position RMSE.
+  std::map<int, double> velocity_rmse;
+  double mean_velocity_rmse = 0.0;
   std::vector<TrackEstimate> trace;     // every reported estimate, for determinism
   std::vector<InstantRecord> instants;  // per truth instant, for recovery analysis
   NeesByRegime nees;                    // all targets
@@ -164,9 +173,10 @@ class Scorer {
   std::map<int, TrackId> last_match_;
   std::map<TrackId, std::pair<std::size_t, std::size_t>> track_counts_;  // reported, matched
   std::map<int, double> sq_;
+  std::map<int, double> vel_sq_;
   // Reads the Associated trace events of `track` not read before; adds their
-  // NIS if `score` (else only marks them read).
-  void collect_nis(const Engine& engine, TrackId track, bool score);
+  // NIS if `score` (else only marks them read) to the score and to `instant`.
+  void collect_nis(const Engine& engine, TrackId track, bool score, ChiSquareStat* instant);
   std::map<TrackId, std::uint64_t> nis_read_;  // Associated events read, per track
   std::map<double, std::size_t> dof_of_gate_;  // gate threshold -> its dof
 };

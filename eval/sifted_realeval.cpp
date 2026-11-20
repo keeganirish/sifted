@@ -37,7 +37,8 @@ constexpr const char* kUsage =
     "  --bins LIST       horizon bin edges [s], ascending (default 0,2,5,10,20,40,80,160)\n"
     "  --out FILE        write to FILE instead of standard output\n"
     "engine (as sifted_fusiond; defaults are EngineConfig's):\n"
-    "  --accel-psd Q  --initial-velocity-sigma V  --gate-probability P  --confirm-hits N\n"
+    "  --motion-model imm|cv  --accel-psd Q (cv only)  --initial-velocity-sigma V\n"
+    "  --gate-probability P  --confirm-hits N\n"
     "  --tentative-timeout S  --coast-after S  --drop-after S  --max-position-sigma M\n";
 
 struct Options {
@@ -101,6 +102,12 @@ Options parse_args(int argc, char** argv) {
       if (o.bins.size() < 2 || o.bins.front() != 0.0) {
         throw std::invalid_argument("--bins needs at least two edges, starting at 0");
       }
+    } else if (a == "--motion-model") {
+      const auto m = estimation::motion_model_from_string(v);
+      if (!m) {
+        throw std::invalid_argument("--motion-model must be imm or cv");
+      }
+      o.engine.motion_model = *m;
     } else if (a == "--confirm-hits") {
       const double n = number(v, "confirm hits");
       if (!(n >= 1.0 && n <= 1000.0 && n == std::floor(n))) {

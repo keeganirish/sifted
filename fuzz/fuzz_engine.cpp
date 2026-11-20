@@ -20,11 +20,13 @@
 //   4. every bounded buffer stays bounded: per-track trace windows, the
 //      contributing-sensor lists, the dropped-track history, the measurement
 //      log, and the pipeline's reorder stage;
-//   5. every live track's state and covariance are finite;
+//   5. every live track's state and covariance are finite (for the IMM, every
+//      mode's too, and the mode probabilities are a distribution);
 //   6. determinism: the two engines (and the two pipelines) fed the same
 //      input produce identical results, tracks and output bytes. The second
 //      of each pair runs with the gate screen off (EngineConfig::association
-//      .gate_screen), so this also proves the screen never changes a result.
+//      .gate_screen), so this also proves the screen never changes a result,
+//      for either motion model (chosen by the input's last byte).
 //
 // Run:  mkdir -p build/fuzz-work-engine && build/fuzz/fuzz/fuzz_engine
 //       build/fuzz-work-engine fuzz/corpus_engine -max_total_time=60
@@ -147,6 +149,13 @@ void check_bounds(const Engine& e) {
     check(r.recent.size() <= c.trace.events_per_track);
     check(r.sensors.size() <= c.trace.sensors_per_track);
     check(r.filter.state().allFinite() && r.filter.covariance().allFinite());
+    if (const estimation::ImmFilter* imm = r.filter.imm()) {
+      const estimation::ModeVector& mu = imm->probabilities();
+      check(mu.allFinite() && mu.minCoeff() > 0.0 && std::abs(mu.sum() - 1.0) < 1e-9);
+      for (std::size_t j = 0; j < estimation::kImmModes; ++j) {
+        check(imm->mode(j).x.allFinite() && imm->mode(j).P.allFinite());
+      }
+    }
   }
 }
 
@@ -167,7 +176,9 @@ bool same_tracks(const Engine& a, const Engine& b) {
   }
   for (std::size_t i = 0; i < ta.size(); ++i) {
     if (ta[i].id != tb[i].id || ta[i].status != tb[i].status || ta[i].time != tb[i].time ||
-        !(ta[i].state == tb[i].state) || !(ta[i].covariance == tb[i].covariance)) {
+        !(ta[i].state == tb[i].state) || !(ta[i].covariance == tb[i].covariance) ||
+        ta[i].mode_probabilities.has_value() != tb[i].mode_probabilities.has_value() ||
+        (ta[i].mode_probabilities && !(*ta[i].mode_probabilities == *tb[i].mode_probabilities))) {
       return false;
     }
   }
@@ -189,6 +200,12 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   c.association.method = (r.u8() & 1U) != 0 ? association::AssignmentMethod::Greedy
                                             : association::AssignmentMethod::GlobalNearestNeighbour;
   c.origin = estimation::GeoOrigin{51.5, 0.0, 0.0};
+  // The motion model (ADR 0014) is taken from the last input byte, read apart
+  // from the stream: every existing corpus entry still decodes to the same
+  // configuration and measurements, and now runs under either estimator.
+  c.motion_model = size > 0 && (data[size - 1] & 1U) != 0
+                       ? estimation::MotionModel::Imm
+                       : estimation::MotionModel::ConstantVelocity;
   pc.max_scan_size = 1 + r.u8() % 16;
   pc.dedup_window = r.u8() % 8;
   pc.reorder_window_s = (r.u8() % 8) * 0.25;

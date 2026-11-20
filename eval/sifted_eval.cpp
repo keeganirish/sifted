@@ -49,6 +49,7 @@ constexpr const char* kUsage =
     "  --format csv|md   output format (default md)\n"
     "  --match-distance M  scoring match distance [m] (default 100, sized for the\n"
     "                    simulator's radar; eval/sifted/eval/scenario.hpp)\n"
+    "  --motion-model cv|imm  estimator (default: the EngineConfig default; ADR 0014)\n"
     "  --out FILE        write to FILE instead of standard output\n";
 
 // ---- options ------------------------------------------------------------------
@@ -60,6 +61,7 @@ struct Options {
   std::vector<double> windows{kDaemonReorderWindowS};
   bool markdown = true;
   double match_distance_m = kMatchDistanceM;
+  EngineConfig engine;  // defaults, except --motion-model
   std::string out;
   std::vector<std::string> args;  // as given, echoed in the report
   bool help = false;
@@ -105,7 +107,7 @@ Options parse_args(int argc, char** argv) {
       return o;
     }
     if (a != "--scenarios" && a != "--seeds" && a != "--levels" && a != "--window" &&
-        a != "--format" && a != "--out" && a != "--match-distance") {
+        a != "--format" && a != "--out" && a != "--match-distance" && a != "--motion-model") {
       throw std::invalid_argument("unknown option " + a);
     }
     if (i + 1 >= argc) {
@@ -146,6 +148,12 @@ Options parse_args(int argc, char** argv) {
       if (!(o.match_distance_m > 0.0 && o.match_distance_m <= 1.0e5)) {
         throw std::invalid_argument("match distance out of range: " + v);
       }
+    } else if (a == "--motion-model") {
+      const auto m = estimation::motion_model_from_string(v);
+      if (!m) {
+        throw std::invalid_argument("--motion-model must be cv or imm");
+      }
+      o.engine.motion_model = *m;
     } else if (a == "--format") {
       if (v != "csv" && v != "md") {
         throw std::invalid_argument("--format must be csv or md");
@@ -273,14 +281,14 @@ struct Run {
 };
 
 Run run_one(const Scenario& sc, const Condition& c, double window_s, std::uint64_t seed,
-            double match_distance_m) {
+            double match_distance_m, const EngineConfig& engine) {
   Run r;
   if (c.direct) {
     std::vector<Measurement> ms = sc.measurements;
     if (c.drop_bearing_only) {
       std::erase_if(ms, [](const Measurement& m) { return m.kind == SensorKind::BearingOnly; });
     }
-    r.score = run_engine(sc, ms, {}, match_distance_m);
+    r.score = run_engine(sc, ms, engine, match_distance_m);
     return r;
   }
   const std::int64_t t0 = sc.truth.front().time_ns;
@@ -303,6 +311,7 @@ Run run_one(const Scenario& sc, const Condition& c, double window_s, std::uint64
     ic.outages.push_back({window->first, window->second});
   }
   net::PipelineConfig pc;
+  pc.engine = engine;
   pc.reorder_window_s = window_s;
   const PipelineRun p =
       run_pipeline(sc, net::impair(sent_frames(ms), ic), pc, kDaemonTickNs, match_distance_m);
@@ -491,10 +500,11 @@ Results evaluate(const Options& o) {
         const double w = c.direct ? 0.0 : o.windows[static_cast<std::size_t>(wi)];
         if (c.seeded()) {
           for (const std::uint64_t seed : o.seeds) {
-            cell.add(run_one(sc, c, w, seed, o.match_distance_m));
+            cell.add(run_one(sc, c, w, seed, o.match_distance_m, o.engine));
           }
         } else {
-          cell.add(run_one(sc, c, w, o.seeds.empty() ? 1 : o.seeds.front(), o.match_distance_m));
+          cell.add(run_one(sc, c, w, o.seeds.empty() ? 1 : o.seeds.front(), o.match_distance_m,
+                           o.engine));
         }
       }
     }
@@ -687,6 +697,10 @@ std::string markdown(const Options& o, const Results& r) {
       "is a deterministic function of its ordered input (docs/design.md section 3). Running the "
       "command twice gives a byte-identical file, and any machine with the same compiler and "
       "maths library gives the same numbers.\n\n";
+  out += "Estimator: `" + std::string(estimation::to_string(o.engine.motion_model)) +
+         "` (EngineConfig::motion_model; ADR 0014). The legacy constant-velocity filter "
+         "against the IMM, including manoeuvres beyond these fixtures: "
+         "[motion-model-evaluation.md](motion-model-evaluation.md).\n\n";
 
   out += "Scenarios: ";
   for (std::size_t i = 0; i < r.scenarios.size(); ++i) {

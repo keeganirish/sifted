@@ -122,6 +122,22 @@ Joseph-form `update_with_innovation(y, H, R)` with a Cholesky solve of `S`;
 `P` is re-symmetrised after every step. Every operation validates its inputs
 and either commits a finite result or leaves the state untouched.
 
+**Motion model (ADR 0014).** New tracks get, by default, an Interacting
+Multiple Model estimator (`estimation::ImmFilter`). It runs three CV modes in
+the same state, with q = 0.5 / 25 / 1200 m²/s³ (quiet, manoeuvre, hard), and
+switches between them by a continuous-time Markov chain with mean sojourns of
+60 / 30 / 15 s, `Π(dt) = expm(G dt)`. Each cycle mixes the modes (with the
+spread-of-means term), predicts each mode with its own q, applies a
+Joseph-form update to each mode linearised at its own state, and weights the
+modes by their Gaussian likelihoods in log space, floored at 1e-4. The output
+is the moment-matched combination. `dt = 0` is an exact no-op, and an update
+is all or nothing across modes. `state()`/`covariance()` of a track, and so
+`TrackEstimate`, the snapshot and the scorer, are the combined 4-state
+estimate. The legacy single CV filter with NIS switching (`motion_model =
+cv`) remains selectable and is what every recording made before ADR 0014
+replays with. `estimation::TrackFilter` gives the engine one interface to
+both.
+
 **EKF models.** Range-bearing `h(x) = [r, wrap(atan2 - yaw)]`, bearing-only
 `h(x) = wrap(atan2 - yaw)`, geodetic position linear in the tangent plane.
 Bearing innovations are wrapped with `std::remainder(., 2*pi)`. Updates are
@@ -134,8 +150,13 @@ screen that skips provably-out-of-gate pairs (section 10), two-pass global
 nearest neighbour (established tracks first), updates, then initiation from
 position-observing leftovers under `max_tracks`. Tentative -> confirmed
 (3 hits) -> coasting (2.5 s) -> dropped (10 s; tentative 3 s; or 1 km
-position sigma). Manoeuvre handling by fading-memory NIS process-noise
-switching.
+position sigma). For the IMM the gating statistic and association cost is
+the mixture statistic `-2 ln Σ w_j exp(-d_j²/2)`. That is the IMM's
+predicted measurement density, relative to its peak scale, over the modes'
+own `d_j²`. For one component it is exactly the CV filter's `d²` (ADR 0014
+compares it with the alternatives). Manoeuvre indication: the legacy filter
+switches process noise on a fading-memory NIS sum; the IMM flags
+`manoeuvring` when `1 - μ_quiet` exceeds 0.8, until it falls below 0.4.
 
 ## 7. Tuning and baseline accuracy
 
@@ -200,9 +221,38 @@ the same `q` plus NIS switching makes the filter roughly consistent (turn:
 3.79; close_pass's turning target: 4.48). Without switching, turn rises to
 5.43, which is optimistic. Tests assert "not optimistic" for straight
 scenarios, which are identified from the truth, and only loose sanity limits
-for manoeuvring ones. No default is changed. An honest straight-flight
-covariance needs a low-`q` model mixed with a manoeuvre model (IMM), not a
-smaller `q`, which breaks turns (turn NEES4 9.0 at `q = 1`).
+for manoeuvring ones. An honest straight-flight covariance is not available to
+any filter with a non-zero steady-state gain against zero-acceleration truth,
+and a smaller `q` breaks turns (turn NEES4 9.0 at `q = 1`). The paragraphs
+above describe the legacy CV filter.
+
+**IMM (ADR 0014, now the default).** Measured by `sifted_motion_eval`
+([motion-model-evaluation.md](motion-model-evaluation.md)), legacy against
+IMM, NEES4 by flight phase over the 110-run manoeuvre set:
+
+| phase | legacy | IMM |
+|---|---:|---:|
+| straight | 2.57 | 2.10 |
+| turn onset (first 10 s) | 86.4 | 16.8 |
+| turn | 32.4 | 2.73 |
+| turn exit (first 10 s) | 4.83 | 2.11 |
+
+The IMM fixes the manoeuvre inconsistency (in turns it is now slightly
+pessimistic instead of 8x optimistic). It does **not** make straight flight
+honest. The cause is the one above: the simulator's straight legs have
+exactly zero acceleration, and the manoeuvre modes the IMM mixes in add
+process noise that is not there. Onset stays optimistic for the few scans the
+mode probabilities need to move.
+
+On its own matched model (`ConsistencyMonteCarlo.ImmMatchedModelIsNearlyConsistent`:
+truth switching modes with the IMM's own `Π(1 s)` and driven by each mode's
+white acceleration; 1 000 runs, estimator fed every measurement), the IMM's
+pooled NEES4 is 4.22 prior / 4.15 posterior, and NIS 2.002 per 2 dof. That
+is 4-5% optimistic, as expected of moment matching, and asserted within 15%.
+Through the engine the same truth loses its track (re-initiation) in 54 of
+200 runs. The mixture gate discounts detections from a mode the track thinks
+improbable, which is the price of not chasing neighbours in a formation
+(ADR 0014).
 
 ## 8. Parameters
 
@@ -211,7 +261,12 @@ header) unless marked.
 
 | Parameter | Default | Reasoning |
 |---|---|---|
-| `accel_psd` | 4 m²/s³ | section 7 |
+| `motion_model` | `imm` (`cv` when a log header lacks it) | ADR 0014 |
+| `imm_accel_psd_quiet` / `_manoeuvre` / `_hard` | 0.5 / 25 / 1200 m²/s³ | `q ≈ (0.5..1) a² T` for ~1 m/s², 5 m/s², 5 g; ADR 0014 |
+| `imm_sojourn_quiet_s` / `_manoeuvre_s` / `_hard_s` | 60 / 30 / 15 s | straight legs of minutes, turns of tens of seconds; ADR 0014 |
+| `imm_probability_floor` | 1e-4 | recovery needs one update with d² ≈ 18; ADR 0014 |
+| `imm_manoeuvre_on` / `_off` | 0.8 / 0.4 | indication hysteresis on `1 - μ_quiet`; display and trace only |
+| `accel_psd` | 4 m²/s³ | legacy `cv` model only; section 7 |
 | `initial_velocity_sigma` | 100 m/s | up to roughly airliner speed from one fix |
 | `gate_probability` | 0.999 | a lost true association is a 1-in-1000 event; global assignment makes the wide gate cheap |
 | `near_miss_factor` | 4 | trace only |
@@ -401,7 +456,13 @@ range-bearing `S_rr ≤ λ + σ_r²`, `S_bb ≤ λ/r² + σ_b²` (λ: largest ei
 of the predicted position covariance) and the plane distance satisfies
 `D² ≤ y_r² + r_m r y_b²`; so `d² ≤ G` implies
 `D² ≤ G (λ (1 + r_m/r) + σ_r² + r_m r σ_b²)`. Pairs beyond that (widened by
-1e-6 relative) are skipped. It is exact in effect: every regression,
+1e-6 relative) are skipped. With the IMM a track has three Gaussian
+components (the mode-matched predictions), and its statistic is
+`d²_mix = -2 ln Σ w_j exp(-d_j²/2)` with `w_j ≥ 0`, `Σ w_j = 1`, so
+`d²_mix ≥ min_j d_j²`. This is clamped in the implementation, so rounding
+cannot break it. Hence `d²_mix ≤ G` implies `d_j² ≤ G` for some mode, which
+by the bound above implies the screen passes for that mode's position and λ.
+The engine skips a pair only when the screen fails for every mode. It is exact in effect: every regression,
 degraded, fault and replay test is unchanged, `GateScreen.*` compares full
 traces with the screen on and off, and `fuzz_engine` does the same on
 arbitrary input. The remaining cost is the all-pairs screen itself
@@ -418,6 +479,13 @@ arbitrary input. The remaining cost is the all-pairs screen itself
   server, fuzzed (ADR 0006).
 - Clock faults: **resolved** with the opt-in clock gate (ADR 0010) and the default
   timeline guard (ADR 0012).
+- Manoeuvring targets and an honest covariance: **resolved for manoeuvres**
+  with the IMM (ADR 0014): ID switches 0.0-0.9 per run through 5 g, against
+  2-7 before. **Open:** straight-flight NEES stays about half its expected
+  value against the simulator's zero-acceleration legs. Dense formations
+  (45 m spacing) lose identity more often with the IMM than with the legacy
+  filter. A turn mode with estimated rate, or formation-aware association,
+  would be the next steps.
 - Sensor bias estimation / registration, frozen-sensor detection, spatial
   indexing for >3 000 tracks per thread, CUDA association: **deferred**
   (documented limitations).

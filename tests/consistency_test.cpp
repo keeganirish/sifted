@@ -165,6 +165,7 @@ struct MonteCarlo {
   std::vector<ChiSquareStat> posterior;   // 4-dof, after the update at t_k
   std::vector<ChiSquareStat> posterior2;  // 2-dof position, after the update
   ChiSquareStat nis;                      // every associated update past the burn-in
+  std::size_t lost = 0;                   // runs whose track was lost (matched IMM model only)
 };
 
 constexpr std::size_t kMcRuns = 200;
@@ -177,14 +178,40 @@ constexpr double kSigmaBearing = 0.2 * kPi / 180.0;
 // One range-bearing radar at the origin; one target ~5 km out at ~60 m/s whose
 // velocity is driven by white acceleration noise of PSD q_truth (exact
 // discretisation for dt = 1 s). Run r uses seed r: independent runs.
-void monte_carlo(double q_truth, const EngineConfig& cfg, MonteCarlo& mc) {
+//
+// With `modes` (the IMM's matched model), q_truth is instead the PSD of the
+// truth's current mode, which starts from the stationary distribution and
+// switches every second with the IMM's own transition matrix Pi(1 s). A run
+// whose track is lost (the truth can random-walk to hundreds of m/s in the
+// hard mode) is counted in `lost` and contributes no samples.
+void monte_carlo(double q_truth, const EngineConfig& cfg, MonteCarlo& mc,
+                 const estimation::ImmParams* modes = nullptr) {
   constexpr SensorId kRadar = 1;
   SensorTable table;
   EXPECT_FALSE(table.add({kRadar, SensorKind::RangeBearing, {0.0, 0.0, 0.0}}));
-  // Q = q_truth [[1/3, 1/2], [1/2, 1]] per axis, and its Cholesky factor.
-  const double l11 = std::sqrt(q_truth / 3.0);
-  const double l21 = l11 > 0.0 ? (q_truth / 2.0) / l11 : 0.0;
-  const double l22 = std::sqrt(std::max(0.0, q_truth - l21 * l21));
+  // Q = q [[1/3, 1/2], [1/2, 1]] per axis, and its Cholesky factor.
+  struct Chol {
+    double l11, l21, l22;
+  };
+  auto chol = [](double q) {
+    const double l11 = std::sqrt(q / 3.0);
+    const double l21 = l11 > 0.0 ? (q / 2.0) / l11 : 0.0;
+    return Chol{l11, l21, std::sqrt(std::max(0.0, q - l21 * l21))};
+  };
+  // Draws a mode from probabilities p (one uniform draw).
+  auto draw = [](net::SplitMix64& rng, const estimation::ModeVector& p) {
+    const double u = rng.uniform();
+    double acc = 0.0;
+    for (Eigen::Index i = 0; i + 1 < p.size(); ++i) {
+      acc += p(i);
+      if (u < acc) {
+        return i;
+      }
+    }
+    return p.size() - 1;
+  };
+  const estimation::ModeMatrix Pi =
+      modes ? estimation::transition_matrix(*modes, 1.0) : estimation::ModeMatrix::Identity();
   mc = {};
   for (std::size_t k = kMcBurnIn; k < kMcSteps; k += kMcEvalEvery) {
     mc.step.push_back(k);
@@ -192,18 +219,30 @@ void monte_carlo(double q_truth, const EngineConfig& cfg, MonteCarlo& mc) {
   mc.prior.resize(mc.step.size());
   mc.posterior.resize(mc.step.size());
   mc.posterior2.resize(mc.step.size());
+  MonteCarlo local;  // one run's samples (matched IMM model: merged if the run completes)
   for (std::size_t run = 0; run < kMcRuns; ++run) {
+    local = {};
+    local.prior.resize(mc.step.size());
+    local.posterior.resize(mc.step.size());
+    local.posterior2.resize(mc.step.size());
+    MonteCarlo& acc = modes ? local : mc;
+    bool lost = false;
     net::SplitMix64 rng(run);
     Engine engine(table, cfg);
     Eigen::Vector4d x(3000.0, 4000.0, -60.0, 20.0);
     TrackId id = 0;  // the track started by the first measurement
+    Eigen::Index mode = modes ? draw(rng, estimation::stationary_probabilities(*modes)) : 0;
     for (std::size_t k = 0; k < kMcSteps; ++k) {
       if (k > 0) {
+        if (modes) {
+          mode = draw(rng, Pi.row(mode).transpose());
+        }
+        const Chol L = chol(modes ? modes->accel_psd[static_cast<std::size_t>(mode)] : q_truth);
         for (Eigen::Index axis = 0; axis < 2; ++axis) {
           const double n1 = gaussian(rng);
           const double n2 = gaussian(rng);
-          x(axis) += x(2 + axis) + l11 * n1;
-          x(2 + axis) += l21 * n1 + l22 * n2;
+          x(axis) += x(2 + axis) + L.l11 * n1;
+          x(2 + axis) += L.l21 * n1 + L.l22 * n2;
         }
       }
       const Timestamp t{static_cast<std::int64_t>(k) * 1'000'000'000};
@@ -219,11 +258,15 @@ void monte_carlo(double q_truth, const EngineConfig& cfg, MonteCarlo& mc) {
       m.sigma = {kSigmaRange, kSigmaBearing, 0.0};
       const auto eval = std::find(mc.step.begin(), mc.step.end(), k);
       const auto e = static_cast<std::size_t>(eval - mc.step.begin());
+      if (modes && k > 0 && !engine.track_at(id, t)) {
+        lost = true;
+        break;
+      }
       if (eval != mc.step.end()) {
         const auto before = engine.track_at(id, t);
         EXPECT_TRUE(before.has_value()) << "run " << run << " step " << k;
         if (before) {
-          mc.prior[e].add(testing::nees(before->state - x, before->covariance), 4);
+          acc.prior[e].add(testing::nees(before->state - x, before->covariance), 4);
         }
       }
       const MeasurementResult res = engine.on_measurement_result(m);
@@ -235,6 +278,10 @@ void monte_carlo(double q_truth, const EngineConfig& cfg, MonteCarlo& mc) {
       // the gate (0.1%) is not associated and has no NIS: gating truncates
       // the distribution slightly (mean 1.986 instead of 2 at P_G = 0.999).
       const store::TrackRecord* rec = engine.store().find(id);
+      if (modes && (rec == nullptr || (k >= kMcBurnIn && res.track != id))) {
+        lost = true;  // dropped, or the measurement went to another track
+        break;
+      }
       ASSERT_NE(rec, nullptr) << "run " << run << " step " << k;
       if (k >= kMcBurnIn && res.track == id) {
         // The newest Associated event (lifecycle events may follow it).
@@ -245,16 +292,30 @@ void monte_carlo(double q_truth, const EngineConfig& cfg, MonteCarlo& mc) {
           }
         }
         ASSERT_TRUE(assoc != nullptr && assoc->time == t) << "run " << run << " step " << k;
-        mc.nis.add(assoc->distance2, 2);
+        // The NIS under the track estimate (equal to the gating d^2 for the
+        // constant-velocity filter; TraceEvent::nis).
+        acc.nis.add(assoc->nis, 2);
       }
       if (eval != mc.step.end()) {
         const auto after = engine.track(id);
         ASSERT_TRUE(after.has_value());
         const Eigen::Vector4d err = after->state - x;
-        mc.posterior[e].add(testing::nees(err, after->covariance), 4);
-        mc.posterior2[e].add(testing::nees(err.head<2>(), after->covariance.topLeftCorner<2, 2>()),
-                             2);
+        acc.posterior[e].add(testing::nees(err, after->covariance), 4);
+        acc.posterior2[e].add(testing::nees(err.head<2>(), after->covariance.topLeftCorner<2, 2>()),
+                              2);
       }
+    }
+    if (modes) {
+      if (lost) {
+        ++mc.lost;
+        continue;
+      }
+      for (std::size_t i = 0; i < mc.step.size(); ++i) {
+        mc.prior[i].merge(local.prior[i]);
+        mc.posterior[i].merge(local.posterior[i]);
+        mc.posterior2[i].merge(local.posterior2[i]);
+      }
+      mc.nis.merge(local.nis);
     }
   }
 }
@@ -269,8 +330,11 @@ void print_monte_carlo(const std::string& name, const MonteCarlo& mc) {
   print_stat(name, "NIS range_bearing", mc.nis);
 }
 
+// The legacy constant-velocity filter (whatever the default motion model) with
+// its manoeuvre switching off.
 EngineConfig without_manoeuvre_switching() {
   EngineConfig cfg;
+  cfg.motion_model = estimation::MotionModel::ConstantVelocity;
   cfg.manoeuvre.accel_psd_factor = 1.0;
   return cfg;
 }
@@ -325,6 +389,112 @@ TEST(ConsistencyMonteCarlo, ZeroAccelerationTruthIsPessimistic) {
   EXPECT_LE(mc.nis.average(), mc.nis.interval().hi);
 }
 
+// The IMM on its own matched model: truth switches between the quiet,
+// manoeuvre and hard modes with the IMM's transition matrix and is driven, in
+// each mode, by that mode's white acceleration (up to ~3.5 g RMS in the hard
+// mode). Two questions, kept apart:
+//
+// 1. Is the estimator consistent? The ImmFilter is driven directly, every
+//    measurement applied (no gate, no association). Unlike the Kalman filter
+//    above the IMM is not exact for this system (it approximates a
+//    3^k-component Gaussian mixture by three moment-matched Gaussians), so the
+//    chi-square intervals are not exact tests and are printed only. Asserted:
+//    NEES and NIS pooled over the steady-state part of every run within 15% of
+//    their expected values. A defect in mixing or combination shows up here:
+//    without the spread-of-means term the posterior NEES4 is far above 4.
+// 2. How often does the engine lose such a target? Its gate is the mixture
+//    statistic (ADR 0014), which keeps a detection from a mode the track
+//    thinks improbable only when the evidence beats that mode's prior: the
+//    price of not chasing a neighbour's detections in dense traffic. Printed,
+//    with a loose bound; docs/design.md section 7 records the measured rate.
+TEST(ConsistencyMonteCarlo, ImmMatchedModelIsNearlyConsistent) {
+  using namespace estimation;
+  const ImmParams params;
+  const ModeMatrix Pi = transition_matrix(params, 1.0);
+  const SensorPose radar{0.0, 0.0, 0.0};
+  constexpr std::size_t kRuns = 1000;
+  constexpr std::size_t kFrom = 30;  // steady state
+  ChiSquareStat prior;
+  ChiSquareStat posterior;
+  ChiSquareStat nis;
+  for (std::size_t run = 0; run < kRuns; ++run) {
+    net::SplitMix64 rng(run);
+    Eigen::Vector4d x(3000.0, 4000.0, -60.0, 20.0);
+    auto draw = [&rng](const ModeVector& p) {
+      const double u = rng.uniform();
+      double acc = 0.0;
+      for (Eigen::Index i = 0; i + 1 < p.size(); ++i) {
+        acc += p(i);
+        if (u < acc) {
+          return i;
+        }
+      }
+      return p.size() - 1;
+    };
+    Eigen::Index mode = draw(stationary_probabilities(params));
+    auto measure = [&] {
+      return RangeBearing{
+          std::hypot(x(0), x(1)) + kSigmaRange * gaussian(rng),
+          std::remainder(std::atan2(x(1), x(0)) + kSigmaBearing * gaussian(rng), 2.0 * kPi)};
+    };
+    const RangeBearing sigma{kSigmaRange, kSigmaBearing};
+    const LocalPosition p0 = range_bearing_to_local(measure(), sigma, radar);
+    StateVector x0 = StateVector::Zero();
+    x0.head<2>() = p0.position;
+    StateCovariance P0 = StateCovariance::Zero();
+    P0.topLeftCorner<2, 2>() = p0.covariance;
+    P0(2, 2) = P0(3, 3) = 100.0 * 100.0;  // EngineConfig::initial_velocity_sigma
+    ImmFilter f = ImmFilter::create(x0, P0, params).value();
+    for (std::size_t k = 1; k < kMcSteps; ++k) {
+      mode = draw(Pi.row(mode).transpose());
+      const double q = params.accel_psd[static_cast<std::size_t>(mode)];
+      const double l11 = std::sqrt(q / 3.0);
+      const double l21 = l11 > 0.0 ? (q / 2.0) / l11 : 0.0;
+      const double l22 = std::sqrt(std::max(0.0, q - l21 * l21));
+      for (Eigen::Index axis = 0; axis < 2; ++axis) {
+        const double n1 = gaussian(rng);
+        const double n2 = gaussian(rng);
+        x(axis) += x(2 + axis) + l11 * n1;
+        x(2 + axis) += l21 * n1 + l22 * n2;
+      }
+      ASSERT_EQ(f.predict(1.0), FilterStatus::Ok);
+      const RangeBearing z = measure();
+      const auto at = range_bearing_innovation(f.state(), radar, z, sigma);
+      ASSERT_TRUE(at);
+      if (k >= kFrom) {
+        prior.add(testing::nees(f.state() - x, f.covariance()), 4);
+        nis.add(*f.mahalanobis2<2>(at->y, at->H, at->R), 2);
+      }
+      ASSERT_EQ(f.update<2>([&](const StateVector& s) {
+        return range_bearing_innovation(s, radar, z, sigma);
+      }),
+                FilterStatus::Ok);
+      if (k >= kFrom) {
+        posterior.add(testing::nees(f.state() - x, f.covariance()), 4);
+      }
+    }
+  }
+  print_stat("imm matched (estimator)", "NEES4 prior, t >= 30 s", prior);
+  print_stat("imm matched (estimator)", "NEES4 posterior, t >= 30 s", posterior);
+  print_stat("imm matched (estimator)", "NIS range_bearing, t >= 30 s", nis);
+  for (const ChiSquareStat* s : {&prior, &posterior, &nis}) {
+    EXPECT_NEAR(s->average(), s->expected(), 0.15 * s->expected());
+  }
+
+  // 2. The engine on the same model (its default IMM).
+  EngineConfig cfg;
+  cfg.motion_model = MotionModel::Imm;
+  MonteCarlo mc;
+  monte_carlo(0.0, cfg, mc, &cfg.imm.model);
+  if (HasFatalFailure()) {
+    return;
+  }
+  print_monte_carlo("monte_carlo imm matched (engine)", mc);
+  std::printf("[ scenario ] monte_carlo imm matched (engine): %zu of %zu runs lost their track\n",
+              mc.lost, kMcRuns);
+  EXPECT_LE(mc.lost, kMcRuns * 2 / 5);
+}
+
 // ---- fixture scenarios ------------------------------------------------------
 
 bool all_targets_straight(const testing::Scenario& sc) {
@@ -341,10 +511,13 @@ bool all_targets_straight(const testing::Scenario& sc) {
   });
 }
 
-void check_scenario(const std::string& name) {
-  const testing::Scenario sc = testing::load_scenario(name);
+void check_scenario(const std::string& scenario, estimation::MotionModel model) {
+  const std::string name = scenario + " " + std::string(estimation::to_string(model));
+  const testing::Scenario sc = testing::load_scenario(scenario);
   ASSERT_FALSE(sc.measurements.empty());
-  const testing::Score s = testing::run_engine(sc);
+  EngineConfig cfg;
+  cfg.motion_model = model;
+  const testing::Score s = testing::run_engine(sc, cfg);
   const bool straight = all_targets_straight(sc);
   std::printf("[ scenario ] %s: consistency (%s)\n", name.c_str(),
               straight ? "straight flight: no target manoeuvres" : "manoeuvring targets");
@@ -399,6 +572,14 @@ void check_scenario(const std::string& name) {
   for (const auto& [kind, st] : s.nis) {
     EXPECT_LT(st.average(), per_dof * st.expected())
         << name << " " << kind_name(kind) << ": manoeuvre switching not holding NIS down";
+  }
+}
+
+// Both estimators: the IMM (the default) and the legacy constant-velocity
+// filter, which old recordings replay with (ADR 0014).
+void check_scenario(const std::string& name) {
+  for (const auto m : {estimation::MotionModel::Imm, estimation::MotionModel::ConstantVelocity}) {
+    check_scenario(name, m);
   }
 }
 

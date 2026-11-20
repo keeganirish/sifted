@@ -17,6 +17,8 @@
 #include "sifted/core/types.hpp"
 #include "sifted/estimation/cv_filter.hpp"
 #include "sifted/estimation/geodetic.hpp"
+#include "sifted/estimation/imm_filter.hpp"
+#include "sifted/estimation/track_filter.hpp"
 #include "sifted/store/track_store.hpp"
 
 namespace sifted {
@@ -93,7 +95,31 @@ struct ManoeuvreConfig {
   friend bool operator==(const ManoeuvreConfig&, const ManoeuvreConfig&) = default;
 };
 
+// Interacting Multiple Model estimator (EngineConfig::motion_model == Imm;
+// estimation/imm_filter.hpp, ADR 0014). `model` holds the modes, the mode
+// switching chain and the probability floor. The manoeuvre indication
+// (TrackEstimate::manoeuvring, ManoeuvreLikely / ManoeuvreUnlikely trace
+// events) is the probability of the two manoeuvre modes, 1 - mu_quiet, with
+// hysteresis: raised above `manoeuvre_on` (4:1 for a manoeuvre), cleared below
+// `manoeuvre_off` (2:3), so evidence hovering near one threshold cannot make
+// it flicker. It is evaluated after every applied update of a track that is no
+// longer tentative (before then the velocity, and so the motion, is not yet
+// observable). Display and trace only: the estimate never depends on it.
+struct ImmConfig {
+  estimation::ImmParams model;
+  double manoeuvre_on = 0.8;
+  double manoeuvre_off = 0.4;
+
+  friend bool operator==(const ImmConfig&, const ImmConfig&) = default;
+};
+
 struct EngineConfig {
+  // Which estimator new tracks get (ADR 0014). ConstantVelocity is the legacy
+  // single filter configured by accel_psd and manoeuvre below; Imm uses
+  // `imm`. Event logs recorded before the choice existed replay with
+  // ConstantVelocity whatever the default (replay/event_log.cpp).
+  estimation::MotionModel motion_model = estimation::MotionModel::Imm;
+  ImmConfig imm;
   // White-noise acceleration PSD for the constant-velocity model [m^2/s^3].
   // Sized with the usual rule of thumb q ~ (0.5..1) * a_max^2 * T for
   // manoeuvres up to a_max ~ 2-3 m/s^2 (e.g. a standard-rate 3 deg/s turn at
@@ -140,7 +166,11 @@ struct TrackEstimate {
   std::uint64_t updates = 0;  // measurements applied, including the initialising one
   SensorId last_sensor = 0;
   std::vector<SensorId> sensors;  // contributing sensors, ascending
-  bool manoeuvring = false;       // raised process noise in effect
+  // Legacy: raised process noise in effect. IMM: manoeuvre modes probable
+  // (ImmConfig, with hysteresis).
+  bool manoeuvring = false;
+  // IMM only: mode probabilities (quiet, manoeuvre, hard) at `time`.
+  std::optional<estimation::ModeVector> mode_probabilities;
   // Decisions ever recorded for this track. The newest entry of `trace` is
   // decision number trace_total - 1, so excerpts from different times can be
   // joined without guessing which events they share.
@@ -230,6 +260,7 @@ class Engine {
   // What the lifecycle decides for a track at `t`. Changes nothing.
   LifecycleVerdict lifecycle_at(const store::TrackRecord& r, Timestamp t) const;
   void update_manoeuvre(store::TrackRecord& r, double d2, Timestamp t);
+  void update_mode_indication(store::TrackRecord& r, Timestamp t);
   TrackEstimate estimate_of(const store::TrackRecord& r) const;
 
   SensorTable sensors_;

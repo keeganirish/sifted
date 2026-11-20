@@ -41,6 +41,18 @@ real-data tests use synthetic inputs generated inside `sim/tests/test_realeval.p
     python3 -m sifted_sim.generate $s ../tests/fixtures/scenarios/$s; done
   ```
 
+- Manoeuvre Monte Carlo sets (ADR 0014) are **not** committed: they are
+  regenerated into the build directory and read by `sifted_motion_eval`
+  (`docs/motion-model-evaluation.md` lists the commands):
+
+  ```bash
+  cd sim && python3 -m sifted_sim.manoeuvres evaluation ../build/release/manoeuvres-eval
+  python3 -m sifted_sim.manoeuvres tuning ../build/release/manoeuvres-tuning
+  python3 -m sifted_sim.manoeuvres reseeded ../build/release/reseeded
+  ```
+
+  Each run is a standard scenario directory named `<condition>_s<seed>`.
+
 - `impairment/golden.txt` (M3): the cross-language golden output of the
   degraded-network model (ADR 0008) for `GOLDEN_CONFIG` in
   `sim/sifted_sim/impair.py` applied to `scenarios/crossing_pair/frames.hex`,

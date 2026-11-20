@@ -76,7 +76,7 @@ python3 -m sifted_sim.send demo --target 127.0.0.1:5601 --speed 1
 | 5-60 s | two tracks converging in the middle | the crossing pair: 30° apart, inside each other's gates for ~10 s. Global nearest neighbour keeps the ids straight. Click one: **Why Track N** in the Tracks tab lists each association with its d² and gate, and which track won a contested measurement |
 | ~20 s | a new track in the east | target 3 entering radar coverage from outside |
 | any time | contributing sensors in the track table and tooltip | radar *and* camera: bearings from the camera's different viewpoint tighten the estimate (~25% lower error in the tests) |
-| 50-80 s | the western track turns | manoeuvre detection raises process noise during the turn (the tooltip says "manoeuvring") |
+| 50-80 s | the western track turns | the IMM's manoeuvre modes take over during the turn (the tooltip says "manoeuvring"; Why Track N shows "Manoeuvre likely" with the probability, ADR 0014) |
 | 70-78 s | all tracks stop updating, then turn "coasting" | the proxy has cut the link. Tracks coast on prediction; nothing is invented |
 | ~78-82 s | tracks update again | recovery: straight-flying targets keep their ids; one that turned during the gap may come back under a new id. Typical recovery 1-4 s |
 | ~95 s | the south-western track coasts and disappears | target 4 leaving coverage: coasting after 2.5 s, dropped after 10 s |

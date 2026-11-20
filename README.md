@@ -73,8 +73,9 @@ Measurements on recorded aircraft are kept apart, in
 
 | Claim | Measured | Proof |
 |---|---|---|
-| **Estimation.** Constant-velocity Kalman filter with range-bearing and bearing-only EKF updates, in Joseph form | Position RMSE against unfiltered radar: 11.1 m vs 22.2 m on straight flight (0.50), 10.7 m vs 14.9 m in a 3 deg/s turn (0.72) | [`scenario_regression_test.cpp`](tests/scenario_regression_test.cpp), [design §6-7](docs/design.md#6-estimation-and-association) |
-| **Filter consistency.** The covariance matches the actual error when the model is right | 200-run Monte Carlo with matched model: NEES 4.02 at t = 90 s (95% interval 3.62-4.40, 4 dof), NIS 2.001 over 16,184 updates (1.969-2.031) | `ConsistencyMonteCarlo.MatchedModelIsConsistent` in [`consistency_test.cpp`](tests/consistency_test.cpp), [design §7](docs/design.md#filter-consistency) |
+| **Estimation.** Interacting Multiple Model estimator: three constant-velocity modes (quiet, manoeuvre, hard), mode switching by a continuous-time Markov chain, mode-matched range-bearing and bearing-only EKF updates in Joseph form. The legacy single filter remains selectable | Position RMSE against unfiltered radar: 9.35 m vs 22.2 m on straight flight (0.42; legacy 11.1 m), 10.1 m vs 14.9 m in a 3 deg/s turn (0.68; legacy 10.6 m) | [`scenario_regression_test.cpp`](tests/scenario_regression_test.cpp), [`imm_test.cpp`](tests/imm_test.cpp), [ADR 0014](docs/adr/0014-imm-motion-model.md), [design §6-7](docs/design.md#6-estimation-and-association) |
+| **Manoeuvring targets.** 1 radar at 1 Hz, turns from 0.3 g to 7 g at 100 and 250 m/s, 10 noise seeds each, on seeds and profiles disjoint from the ones the parameters were checked on | ID switches per run from 1 g to 5 g: legacy 2.0-6.8, IMM 0.0-0.9; missed target-instants 4.5-13.6% → 0.0-2.9% | [Motion-model evaluation](docs/motion-model-evaluation.md), [ADR 0014](docs/adr/0014-imm-motion-model.md) |
+| **Filter consistency.** The covariance matches the actual error when the model is right | Legacy filter, 200-run Monte Carlo with matched model: NEES 4.02 at t = 90 s (95% interval 3.62-4.40, 4 dof), NIS 2.001 over 16,184 updates (1.969-2.031). IMM on its own switching model, 1,000 runs: NEES 4.15-4.22, NIS 2.002 (moment matching is 4-5% optimistic). In turns NEES falls from 32 (legacy) to 2.7 | `ConsistencyMonteCarlo.*` in [`consistency_test.cpp`](tests/consistency_test.cpp), [design §7](docs/design.md#filter-consistency) |
 | **Tracking accuracy.** All seven scenarios, direct engine feed | Mean RMSE 9.87 m, worst target 12.20 m; 0 missed target-instants, 0 ID switches, 0 false tracks | [Scorecard summary](docs/evaluation.md#summary-over-all-scenarios) |
 | **Association.** Chi-square gating (p = 0.999) and Hungarian global nearest neighbour. `formation_split` flies three targets 45 m apart (about 3 radar range sigmas), so assignment decides identity on every scan | GNN: 0 ID switches, worst target 11.58 m. Greedy: 2 ID switches, worst target 35.49 m. Over five noise seeds: 12 ID switches for GNN, 28 for greedy | `MultiTargetRegression.FormationSplit` in [`multi_target_regression_test.cpp`](tests/multi_target_regression_test.cpp), [ADR 0004](docs/adr/0004-association-and-lifecycle.md) |
 | **Determinism.** Replay reproduces the output bit for bit, including impaired and faulted runs | Live daemon run through the impairment proxy with a sensor restart: 2,056 output lines identical under `cmp`, with 117 frames lost to the outage, 89 to loss and 28 duplicated | `Replay.RecordedRunReplaysBitForBit`, `Reorder.ImpairedRecordedRunReplaysBitForBit`, `Faults.FaultedRunsAreDeterministic`; [design §3](docs/design.md#3-determinism-contract) |
@@ -125,6 +126,11 @@ towards unusual flights ([limitations](docs/real-data-evaluation.md#limitations)
 - **Global nearest neighbour, not JPDA or MHT ([ADR 0004](docs/adr/0004-association-and-lifecycle.md)).**
   Decisions are deterministic and explainable from a per-track trace. JPDA and
   MHT do better in dense clutter, at much higher complexity.
+- **IMM of three constant-velocity modes, not a coordinated-turn model ([ADR 0014](docs/adr/0014-imm-motion-model.md)).**
+  The modes share one state, so mixing is exact and bearing-only updates need no
+  unobservable turn rate. Gating uses the IMM's own predicted measurement density.
+  The costs are more estimation work per track, and less identity margin in
+  tight formations. The legacy filter is kept, and old recordings replay with it.
 - **Record the engine thread's input ([ADR 0005](docs/adr/0005-event-log.md)).**
   Replay recomputes everything downstream of the log instead of trusting stored
   results. Every parameter that changes output must be in the log header.
@@ -158,10 +164,16 @@ towards unusual flights ([limitations](docs/real-data-evaluation.md#limitations)
 - **The gate screen is still all-pairs.** Cost grows with measurements × tracks.
   A spatial index for more than about 3,000 tracks per thread is deferred
   ([design §10-11](docs/design.md#11-open-questions-final-status)).
-- **The filter is pessimistic in straight flight.** NEES is about half its
-  expected value because the process noise budgets for manoeuvres. An honest
-  straight-flight covariance needs an IMM
+- **The covariance is still pessimistic in straight flight.** NEES is about
+  half its expected value (IMM 2.1, legacy 2.6, of 4). The simulator's straight
+  legs have exactly zero acceleration, and any filter that can follow a
+  manoeuvre budgets for one. The IMM fixed turns (NEES 32 → 2.7), not this
   ([design §7](docs/design.md#filter-consistency)).
+- **Dense formations lose identity more often with the IMM.** Three targets
+  45 m apart: 0.8 ID switches per run against 0.3 for the legacy filter over
+  ten noise seeds, worse under mild impairment. A filter agile enough for a 5 g
+  turn can also follow a neighbour's detections
+  ([ADR 0014](docs/adr/0014-imm-motion-model.md)).
 - **On real ADS-B the tracker predicts worse than dead reckoning.** It never sees
   the aircraft's velocity reports, and its 50 m ADS-B sigma is inconsistent with
   real reports (NIS 0.13), yet a measured sigma alone makes prediction worse

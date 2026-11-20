@@ -57,11 +57,15 @@ Scenario without_bearings(Scenario sc) {
   return sc;
 }
 
-void check(const std::string& name, const Bounds& b, std::size_t expected_targets) {
-  const Scenario sc = load_scenario(name);
+void check_model(const std::string& scenario, const Bounds& b, std::size_t expected_targets,
+                 estimation::MotionModel model) {
+  const std::string name = scenario + " (" + std::string(estimation::to_string(model)) + ")";
+  EngineConfig cfg;
+  cfg.motion_model = model;
+  const Scenario sc = load_scenario(scenario);
   EXPECT_FALSE(sc.measurements.empty());
-  const Score s = run(sc);
-  const Score radar_only = run(without_bearings(sc));
+  const Score s = run(sc, cfg);
+  const Score radar_only = run(without_bearings(sc), cfg);
   const double bearing_share =
       s.bearings ? static_cast<double>(s.bearings_associated) / static_cast<double>(s.bearings)
                  : 0.0;
@@ -88,12 +92,20 @@ void check(const std::string& name, const Bounds& b, std::size_t expected_target
   EXPECT_EQ(s.track_limit, 0U);
 
   // Same input, same bits (ADR 0002).
-  const Score again = run(sc);
+  const Score again = run(sc, cfg);
   EXPECT_EQ(again.trace.size(), s.trace.size());
   for (std::size_t i = 0; i < s.trace.size() && i < again.trace.size(); ++i) {
     ASSERT_EQ(again.trace[i].id, s.trace[i].id);
     ASSERT_TRUE(again.trace[i].state == s.trace[i].state) << "estimate " << i;
     ASSERT_TRUE(again.trace[i].covariance == s.trace[i].covariance) << "estimate " << i;
+  }
+}
+
+// The same bounds for both estimators: the IMM (the default, ADR 0014) and the
+// legacy constant-velocity filter the bounds were set with.
+void check(const std::string& name, const Bounds& b, std::size_t expected_targets) {
+  for (const auto m : {estimation::MotionModel::Imm, estimation::MotionModel::ConstantVelocity}) {
+    check_model(name, b, expected_targets, m);
   }
 }
 
@@ -106,6 +118,13 @@ void check(const std::string& name, const Bounds& b, std::size_t expected_target
 //   crossing_pair  8.39 8.63                    0/172   0     0      338/338    8.51/11.18 (0.76)
 //   close_pass     10.49 7.64 12.20             0/258   0     0      425/425   10.11/13.33 (0.76)
 //   enter_leave    7.78 9.98 9.62 8.24          0/302   0     0      577/666    8.91/11.10 (0.80)
+//
+// With the IMM (the default since ADR 0014; same bounds, both estimators run):
+//
+//   crossing_pair  7.09 7.09                    0/172   0     0      338/338    7.09/9.16  (0.77)
+//   close_pass     8.60 5.94 10.27              0/258   0     0      425/425    8.27/11.44 (0.72)
+//   enter_leave    (per target: evaluation.md)  0/302   0     0      578/666    7.30/9.76  (0.75)
+//   formation_split (per target: evaluation.md) 0/258   0     0      507/507   10.41/26.45 (0.39)
 //
 // RMSE bounds sit ~35% above the worst target, like the M1 test. Bearings:
 // in crossing_pair and close_pass every bearing comes from a target that is
@@ -159,7 +178,12 @@ TEST(MultiTargetRegression, EnterLeave) { check("enter_leave", {14.0, 0.05, 0, 0
 TEST(MultiTargetRegression, FormationSplit) {
   check("formation_split", {16.0, 0.02, 0, 0, 0.9}, 3);
 
+  // The GNN-versus-greedy comparison was built with, and is kept on, the
+  // constant-velocity filter: with the IMM this fixture's noise draw happens
+  // to stay unambiguous for greedy too (ADR 0014; over ten other seeds the
+  // IMM breaks formation identity more often, not less).
   EngineConfig greedy;
+  greedy.motion_model = estimation::MotionModel::ConstantVelocity;
   greedy.association.method = association::AssignmentMethod::Greedy;
   const Score g = run(load_scenario("formation_split"), greedy);
   std::printf(

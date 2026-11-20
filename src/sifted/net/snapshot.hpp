@@ -34,8 +34,14 @@
 // `trace` holds the track's newest decisions, oldest first, at most
 // PipelineConfig::snapshot_trace_events of them; its last entry is decision
 // number trace_total - 1. d2 and gate are null for events with no statistic;
-// on manoeuvre events they are the fading-memory innovation statistic and its
-// threshold. sensor and seq are 0 on events not caused by a measurement.
+// on "manoeuvre start/end" (legacy constant-velocity filter) they are the
+// fading-memory innovation statistic and its threshold, on "manoeuvre
+// likely/unlikely" (IMM, ADR 0014) the probability of the manoeuvre modes and
+// its threshold. sensor and seq are 0 on events not caused by a measurement.
+// The two IMM kinds are additive (kind is open text to a reader, and runs with
+// the legacy filter never emit them), so the version stays 2. Mode
+// probabilities themselves are not published: `manoeuvring` and these events
+// carry what an operator acts on (ADR 0014).
 //
 // `feed` says how fresh the input is, in receive time: age_ms since the newest
 // accepted frame, per sensor and overall. predicted_ms is how far time_ns lies

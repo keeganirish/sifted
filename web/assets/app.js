@@ -202,6 +202,9 @@ function traceLabel(e) {
     case "dropped": return `Dropped: ${esc(e.drop_reason)}`;
     case "manoeuvre start": return `Manoeuvre detected${nis}`;
     case "manoeuvre end": return `Manoeuvre ended${nis}`;
+    // IMM (ADR 0014): d2 is the probability of the manoeuvre modes, gate its threshold.
+    case "manoeuvre likely": return `Manoeuvre likely${has ? `: P(manoeuvre) ${Math.round(e.d2 * 100)}% > ${Math.round(e.gate * 100)}%` : ""}`;
+    case "manoeuvre unlikely": return `Manoeuvre over${has ? `: P(manoeuvre) ${Math.round(e.d2 * 100)}% < ${Math.round(e.gate * 100)}%` : ""}`;
     default: return esc(e.kind);
   }
 }
@@ -759,7 +762,7 @@ function watchItems(a) {
     items.push([5, "Two tracks converge in the middle: the crossing pair. Global nearest-neighbour assignment keeps their ids straight."]);
     items.push([20, "A new track in the east: a target entering radar coverage from outside."]);
     items.push([30, "Radar and camera both contribute (Sensors column): the camera's bearings from another site tighten the estimate."]);
-    items.push([50, "The western track turns; its tooltip says \"manoeuvring\" while the filter adapts."]);
+    items.push([50, "The western track turns; its tooltip says \"manoeuvring\" while the manoeuvre modes are probable."]);
     items.push([95, "The south-western track leaves coverage: it coasts (amber, dashed), then is dropped."]);
   } else {
     items.push([0, "Tracks appear once confirmed by 3 radar hits. Turn on \"Show tentative tracks\" (Tracks tab) to see them earlier."]);

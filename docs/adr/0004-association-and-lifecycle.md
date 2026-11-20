@@ -3,7 +3,11 @@
 Status: accepted (M2). *Written down in M3: the M2 code and comments refer to
 this record but it was not in the repository; it records the decisions the M2
 implementation embodies. M3 added the greedy comparison method and the gate
-screen (sections below marked M3).*
+screen (sections below marked M3).* ADR 0014 adds the IMM motion model: for
+IMM tracks the gating statistic and assignment cost is the mixture statistic
+over the modes (the same chi-square gate and solver), and manoeuvre handling
+is the IMM's mode probabilities instead of NIS process-noise switching, which
+remains for the legacy `cv` model.
 
 ## Context
 With many targets and several sensors, every measurement must be attributed

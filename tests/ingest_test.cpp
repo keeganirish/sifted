@@ -202,8 +202,9 @@ TEST(Snapshot, TraceStringsAreStableAndNeedNoEscaping) {
                                      [](char c) { return (c >= 'a' && c <= 'z') || c == ' '; });
   };
   const std::array<std::string_view, store::kTraceEventKindCount> kinds = {
-      "initiated", "associated", "competed", "near miss",       "update rejected", "confirmed",
-      "coasting",  "recovered",  "dropped",  "manoeuvre start", "manoeuvre end"};
+      "initiated",     "associated",       "competed",          "near miss", "update rejected",
+      "confirmed",     "coasting",         "recovered",         "dropped",   "manoeuvre start",
+      "manoeuvre end", "manoeuvre likely", "manoeuvre unlikely"};
   for (std::size_t k = 0; k < kinds.size(); ++k) {
     EXPECT_EQ(store::to_string(static_cast<store::TraceEventKind>(k)), kinds[k]);
     EXPECT_TRUE(plain(kinds[k])) << kinds[k];

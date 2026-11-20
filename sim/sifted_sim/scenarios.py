@@ -47,6 +47,18 @@ constrain the target from different directions.
                        probability (0.85), more clutter and a 6 s camera
                        dropout. Exercises tentative -> confirmed -> coasting ->
                        dropped.
+
+Parametric manoeuvre family (motion-model evaluation, ADR 0014). Not
+committed as fixtures: `sifted_sim.manoeuvres` writes Monte Carlo sets of them
+into the build directory.
+
+    manoeuvre(load_g, speed_mps, seed)
+                       One radar at the origin (10 m, 0.2 deg, 1 Hz, Pd 0.9,
+                       0.5 clutter points per scan, 60 km coverage), one target
+                       starting at (-6000, 15000) m flying east: 30 s straight,
+                       a constant-rate turn of load_g g lasting
+                       min(180 deg / rate, 40 s), then 30 s straight. Right
+                       turn by default. The radar seed is the noise seed.
 """
 
 from __future__ import annotations
@@ -213,6 +225,40 @@ def demo() -> MultiScenario:
     camera = _camera(24, 7102, x_m=-4000.0, y_m=4000.0, yaw_rad=-math.pi / 4,
                      fov_rad=math.radians(150.0))
     return MultiScenario("demo", [_radar(14, 7101)], [camera], targets, 150.0)
+
+
+G0_MPS2 = 9.80665  # standard gravity
+
+
+@dataclass(frozen=True)
+class ManoeuvreLeg:
+    """One turn of a manoeuvre profile: load factor [g] (> 0) and direction."""
+
+    load_g: float
+    right: bool = True
+
+
+def manoeuvre(load_g: float, speed_mps: float, seed: int, *, legs: tuple[ManoeuvreLeg, ...] = (),
+              straight_s: float = 30.0, max_turn_s: float = 40.0,
+              start: tuple[float, float] = (-6000.0, 15000.0)) -> MultiScenario:
+    """Straight, turn(s), straight; see the module docstring.
+
+    `legs` replaces the single right turn of `load_g` g with a sequence of
+    turns, each followed by `straight_s` of straight flight (used for the
+    separate tuning set: left turns and S-turns at other loads).
+    """
+    if not (load_g > 0.0 and speed_mps > 0.0):
+        raise ValueError("load and speed must be positive")
+    turns = legs or (ManoeuvreLeg(load_g),)
+    segments: list = [Straight(straight_s)]
+    for leg in turns:
+        rate = leg.load_g * G0_MPS2 / speed_mps
+        segments.append(Turn(min(math.pi / rate, max_turn_s), -rate if leg.right else rate))
+        segments.append(Straight(straight_s))
+    traj = Trajectory(TargetState(start[0], start[1], speed_mps, 0.0), segments)
+    radar = _radar(1, seed, max_range_m=60000.0)
+    name = f"manoeuvre_{load_g:g}g_{speed_mps:g}mps_s{seed}"
+    return MultiScenario(name, [radar], [], [Target(1, traj)], traj.duration_s)
 
 
 SCENARIOS = {s.__name__: s for s in (straight_crossing, turn)}

@@ -110,41 +110,68 @@ void expect_score(const Row& row, const testing::Score& s, const std::string& wh
 }
 
 // The baselines recorded with MultiTargetRegression (direct feed, default
-// configuration): per-target RMSE, mean RMSE, eligible target-instants (0
-// missed, 0 ID switches, 0 false tracks) and the radar-only mean RMSE.
+// configuration otherwise): per-target RMSE, mean RMSE, eligible
+// target-instants (0 missed, 0 ID switches, 0 false tracks) and the
+// radar-only mean RMSE. For both estimators: the IMM (the default since
+// ADR 0014) and the legacy constant-velocity filter, whose numbers are those
+// recorded since M2 and must never move (old recordings replay with it).
 struct Baseline {
+  estimation::MotionModel model;
   const char* scenario;
   const char* per_target;
   const char* mean;
   const char* eligible;
   const char* without_bearing_only_mean;
 };
+using estimation::MotionModel;
 constexpr Baseline kBaselines[] = {
-    {"crossing_pair", "1:8.39 2:8.63", "8.51", "172", "11.18"},
-    {"close_pass", "1:10.49 2:7.64 3:12.20", "10.11", "258", "13.33"},
+    {MotionModel::Imm, "crossing_pair", "1:7.09 2:7.09", "7.09", "172", "9.16"},
+    {MotionModel::Imm, "close_pass", "1:8.60 2:5.94 3:10.27", "8.27", "258", "11.44"},
+    {MotionModel::ConstantVelocity, "crossing_pair", "1:8.39 2:8.63", "8.51", "172", "11.18"},
+    {MotionModel::ConstantVelocity, "close_pass", "1:10.49 2:7.64 3:12.20", "10.11", "258",
+     "13.33"},
 };
+
+void check_baseline(const Baseline& b, const std::vector<Row>& rows, const EngineConfig& cfg);
 
 TEST(Eval, ScorecardMatchesRegressionTests) {
   const std::string dir = std::string(SIFTED_FIXTURE_DIR) + "/scenarios/";
-  const std::string out = ::testing::TempDir() + "sifted_eval_smoke.csv";
-  std::string cmd = std::string("\"") + SIFTED_EVAL_BIN + "\"";
-  for (const Baseline& b : kBaselines) {
-    cmd += " --scenarios \"" + dir + b.scenario + "\"";
-  }
-  cmd += " --levels clean --seeds 7 --format csv --out \"" + out + "\"";
-  ASSERT_EQ(std::system(cmd.c_str()), 0) << cmd;
-  const std::string first = slurp(out);
-  ASSERT_EQ(std::system(cmd.c_str()), 0) << cmd;
-  EXPECT_EQ(slurp(out), first) << "two runs must write identical bytes";
-  const std::vector<Row> rows = parse_csv(first);
+  for (const MotionModel model : {MotionModel::Imm, MotionModel::ConstantVelocity}) {
+    const std::string name(estimation::to_string(model));
+    const std::string out = ::testing::TempDir() + "sifted_eval_smoke_" + name + ".csv";
+    std::string cmd = std::string("\"") + SIFTED_EVAL_BIN + "\"";
+    for (const Baseline& b : kBaselines) {
+      if (b.model == model) {
+        cmd += " --scenarios \"" + dir + b.scenario + "\"";
+      }
+    }
+    cmd +=
+        " --levels clean --seeds 7 --format csv --motion-model " + name + " --out \"" + out + "\"";
+    ASSERT_EQ(std::system(cmd.c_str()), 0) << cmd;
+    const std::string first = slurp(out);
+    ASSERT_EQ(std::system(cmd.c_str()), 0) << cmd;
+    EXPECT_EQ(slurp(out), first) << "two runs must write identical bytes";
+    const std::vector<Row> rows = parse_csv(first);
+    EngineConfig cfg;
+    cfg.motion_model = model;
 
-  for (const Baseline& b : kBaselines) {
+    for (const Baseline& b : kBaselines) {
+      if (b.model != model) {
+        continue;
+      }
+      check_baseline(b, rows, cfg);
+    }
+  }
+}
+
+void check_baseline(const Baseline& b, const std::vector<Row>& rows, const EngineConfig& cfg) {
+  {
     const testing::Scenario sc = testing::load_scenario(b.scenario);
 
     // Direct feed: the regression tests' scorer, the recorded baselines.
     const Row* direct = find(rows, b.scenario, "direct", "");
     ASSERT_NE(direct, nullptr) << b.scenario;
-    expect_score(*direct, testing::run_engine(sc), b.scenario);
+    expect_score(*direct, testing::run_engine(sc, cfg), b.scenario);
     EXPECT_EQ(direct->at("per_target_rmse_m"), b.per_target) << b.scenario;
     EXPECT_EQ(direct->at("mean_rmse_m"), b.mean) << b.scenario;
     EXPECT_EQ(direct->at("missed"), "0") << b.scenario;
@@ -161,6 +188,7 @@ TEST(Eval, ScorecardMatchesRegressionTests) {
     ic.seed = 7;
     ic.global = testing::impairment_level("clean");
     net::PipelineConfig pc;
+    pc.engine = cfg;
     pc.reorder_window_s = testing::kDaemonReorderWindowS;
     const testing::PipelineRun p =
         testing::run_pipeline(sc, net::impair(testing::sent_frames(sc.measurements), ic), pc);

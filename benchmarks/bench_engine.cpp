@@ -7,7 +7,8 @@
 //   sifted_bench all        everything above, CSV on stdout
 //   sifted_bench profile    one 1000-target configuration, to run under a profiler
 // Options: --no-screen (gating without the M3 gate screen, for before/after
-// numbers; results are identical, only time differs), --max-targets N.
+// numbers; results are identical, only time differs), --max-targets N,
+// --motion-model imm|cv (the estimator; default EngineConfig's, ADR 0014).
 //
 // Build with the release preset. Timing (std::chrono::steady_clock) lives
 // only here, around Engine::on_scan; the engine never reads a clock. Each
@@ -73,11 +74,14 @@ struct RunResult {
 // Warm-up scans let tracks confirm, so the timed scans see a steady state.
 bool g_screen = true;              // --no-screen: the M2 gating path, for before/after
 std::size_t g_max_targets = 3000;  // --max-targets: cap the scan sweep
+// --motion-model cv|imm: the estimator (default: EngineConfig's, ADR 0014).
+estimation::MotionModel g_model = EngineConfig{}.motion_model;
 
 RunResult run_once(const bench::WorkloadConfig& wc, std::size_t warmup, std::size_t scans) {
   bench::Workload w(wc);
   EngineConfig cfg;
   cfg.association.gate_screen = g_screen;
+  cfg.motion_model = g_model;
   cfg.max_tracks = std::max<std::size_t>(1024, 4 * (wc.targets + wc.clutter));
   Engine engine(bench::radar_table(), cfg);
   std::vector<MeasurementResult> out;
@@ -225,7 +229,14 @@ int main(int argc, char** argv) {
       return 2;
     }
     const char* v = argv[i + 1];
-    if (k == "--max-targets") {
+    if (k == "--motion-model") {
+      const auto m = estimation::motion_model_from_string(v);
+      if (!m) {
+        std::fprintf(stderr, "--motion-model must be imm or cv\n");
+        return 2;
+      }
+      g_model = *m;
+    } else if (k == "--max-targets") {
       g_max_targets = std::strtoul(v, nullptr, 10);
     } else if (k == "--runs") {
       runs = std::strtoul(v, nullptr, 10);

@@ -353,7 +353,9 @@ TEST(Lifecycle, TrackCapIsEnforcedAndCounted) {
 }
 
 TEST(Lifecycle, ManoeuvreRaisesProcessNoiseAndIsTraced) {
-  Engine e(table());
+  EngineConfig cv;  // the legacy detector belongs to the constant-velocity filter
+  cv.motion_model = estimation::MotionModel::ConstantVelocity;
+  Engine e(table(), cv);
   std::uint32_t seq = feed_line(e, 4000.0, 0.0, 0.0, 50.0, 10);
   EXPECT_FALSE(e.track(1)->manoeuvring);
   // From t = 10 s, a sustained 4 m/s^2 lateral acceleration (noiseless).
@@ -366,6 +368,44 @@ TEST(Lifecycle, ManoeuvreRaisesProcessNoiseAndIsTraced) {
   }
   EXPECT_TRUE(detected);
   EXPECT_NE(e.explain(1)->find("manoeuvre start"), std::string::npos);
+}
+
+// IMM (ADR 0014): the same sustained 4 m/s^2 acceleration, then straight flight
+// again. The manoeuvre modes become probable during the acceleration and
+// improbable after it; with the hysteresis band each change is traced exactly
+// once (no flicker), with the probability and the threshold it crossed.
+TEST(Lifecycle, ImmManoeuvreIndicationFollowsModeProbability) {
+  EngineConfig cfg;
+  cfg.motion_model = estimation::MotionModel::Imm;
+  Engine e(table(), cfg);
+  std::uint32_t seq = feed_line(e, 4000.0, 0.0, 0.0, 50.0, 10);
+  ASSERT_TRUE(e.track(1)->mode_probabilities.has_value());
+  EXPECT_FALSE(e.track(1)->manoeuvring);
+  bool detected = false;
+  for (int k = 1; k <= 15; ++k) {
+    const double s = static_cast<double>(k);
+    e.on_measurement(radar_at(4000.0 + 2.0 * s * s, 450.0 + 50.0 * s, (9 + k) * kSecond, seq++));
+    ASSERT_TRUE(e.track(1).has_value()) << "track lost at k=" << k;
+    detected = detected || e.track(1)->manoeuvring;
+  }
+  EXPECT_TRUE(detected);
+  for (int k = 16; k <= 60; ++k) {  // vx is now 60 m/s, constant
+    const double s = static_cast<double>(k);
+    e.on_measurement(
+        radar_at(4450.0 + 60.0 * (s - 15.0), 450.0 + 50.0 * s, (9 + k) * kSecond, seq++));
+    ASSERT_TRUE(e.track(1).has_value()) << "track lost at k=" << k;
+  }
+  const auto t = e.track(1);
+  EXPECT_FALSE(t->manoeuvring);
+  EXPECT_GT((*t->mode_probabilities)(0), 0.6);  // quiet again
+  const store::TrackRecord* r = e.store().find(1);
+  using store::TraceEventKind;
+  EXPECT_EQ(r->totals[static_cast<std::size_t>(TraceEventKind::ManoeuvreLikely)], 1U);
+  EXPECT_EQ(r->totals[static_cast<std::size_t>(TraceEventKind::ManoeuvreUnlikely)], 1U);
+  EXPECT_EQ(r->totals[static_cast<std::size_t>(TraceEventKind::ManoeuvreStart)], 0U);
+  const std::string why = *e.explain(1);
+  EXPECT_NE(why.find("manoeuvre likely"), std::string::npos) << why;
+  EXPECT_NE(why.find("p_manoeuvre="), std::string::npos) << why;
 }
 
 // ---- geodetic (ADS-B) measurements --------------------------------------------

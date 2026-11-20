@@ -28,4 +28,9 @@ if(SIFTED_BUILD_EVAL)
   # for evaluation B.
   add_executable(sifted_realeval sifted_realeval.cpp)
   target_link_libraries(sifted_realeval PRIVATE sifted::eval_support sifted_options)
+
+  # Legacy constant-velocity filter against the IMM (ADR 0014;
+  # docs/motion-model-evaluation.md).
+  add_executable(sifted_motion_eval sifted_motion_eval.cpp)
+  target_link_libraries(sifted_motion_eval PRIVATE sifted::eval_support sifted_options)
 endif()

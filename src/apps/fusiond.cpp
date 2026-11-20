@@ -11,6 +11,7 @@
 // every value read is written to the event log.
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -90,8 +91,17 @@ constexpr const char* kUsage =
     "  --record-flush-records N  ... and at least every N records [64]\n"
     "  --record-sync S         force the recording to disk every S seconds (0: leave it to\n"
     "                          the OS)                           [1]\n"
-    "  tracker parameters (defaults: docs/design.md section 6):\n"
-    "  --accel-psd Q  --initial-velocity-sigma V  --gate-probability P\n"
+    "  tracker parameters (defaults: docs/design.md section 8):\n"
+    "  --motion-model imm|cv    estimator (ADR 0014): IMM of three nearly-constant-velocity\n"
+    "                          modes, or the legacy single filter with NIS-switched\n"
+    "                          process noise                     [imm]\n"
+    "  --imm-accel-psd Q0,Q1,Q2  IMM quiet, manoeuvre, hard acceleration PSD [m^2/s^3],\n"
+    "                          non-decreasing                    [0.5,25,1200]\n"
+    "  --imm-sojourn T0,T1,T2  IMM mean time in each mode [s]     [60,30,15]\n"
+    "  --imm-probability-floor P  lowest mode probability          [0.0001]\n"
+    "  --imm-manoeuvre-on P  --imm-manoeuvre-off P  manoeuvre indication hysteresis on\n"
+    "                          1 - P(quiet)                      [0.8, 0.4]\n"
+    "  --accel-psd Q (legacy cv model only)  --initial-velocity-sigma V  --gate-probability P\n"
     "  --confirm-hits N  --tentative-timeout S  --coast-after S  --drop-after S\n"
     "  --max-position-sigma M  --max-tracks N  --snapshot-interval S\n"
     "  --snapshot-trace-events N (newest decisions per track per snapshot, 0-32; 0: none) [4]\n"
@@ -155,6 +165,19 @@ bool parse_origin(std::string_view s, estimation::GeoOrigin& o) {
   o = {};
   return parse_num(parts[0], o.lat_deg) && parse_num(parts[1], o.lon_deg) &&
          (parts.size() == 2 || parse_num(parts[2], o.alt_m)) && estimation::is_valid(o);
+}
+
+// "a,b,c": exactly one number per IMM mode.
+bool parse_modes(std::string_view s, std::array<double, estimation::kImmModes>& out) {
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    const auto c = s.find(',');
+    if ((c == std::string_view::npos) != (i + 1 == out.size()) ||
+        !parse_num(s.substr(0, c), out[i])) {
+      return false;
+    }
+    s.remove_prefix(c == std::string_view::npos ? s.size() : c + 1);
+  }
+  return true;
 }
 
 bool parse_host_port(std::string_view s, std::string& host, std::uint16_t& port) {
@@ -283,6 +306,23 @@ std::string parse_args(int argc, char** argv, Options& o) {
       ok = num(o.pace) && o.pace >= 0.0;
     } else if (a == "--hold") {
       o.hold = true;
+    } else if (a == "--motion-model") {
+      const auto v = value();
+      o.tuning_given = true;
+      const auto m = v ? estimation::motion_model_from_string(*v) : std::nullopt;
+      ok = m.has_value();
+      o.config.engine.motion_model = m.value_or(o.config.engine.motion_model);
+    } else if (a == "--imm-accel-psd" || a == "--imm-sojourn") {
+      const auto v = value();
+      o.tuning_given = true;
+      auto& model = o.config.engine.imm.model;
+      ok = v && parse_modes(*v, a == "--imm-accel-psd" ? model.accel_psd : model.sojourn_s);
+    } else if (a == "--imm-probability-floor") {
+      ok = tuning(o.config.engine.imm.model.probability_floor);
+    } else if (a == "--imm-manoeuvre-on") {
+      ok = tuning(o.config.engine.imm.manoeuvre_on);
+    } else if (a == "--imm-manoeuvre-off") {
+      ok = tuning(o.config.engine.imm.manoeuvre_off);
     } else if (a == "--accel-psd") {
       ok = tuning(o.config.engine.accel_psd);
     } else if (a == "--initial-velocity-sigma") {

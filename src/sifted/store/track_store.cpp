@@ -49,6 +49,10 @@ std::string_view to_string(TraceEventKind k) noexcept {
       return "manoeuvre start";
     case TraceEventKind::ManoeuvreEnd:
       return "manoeuvre end";
+    case TraceEventKind::ManoeuvreLikely:
+      return "manoeuvre likely";
+    case TraceEventKind::ManoeuvreUnlikely:
+      return "manoeuvre unlikely";
   }
   return "unknown";
 }
@@ -72,9 +76,11 @@ std::string format(const TraceEvent& e) {
   if (!std::isnan(e.distance2)) {
     const bool manoeuvre =
         e.kind == TraceEventKind::ManoeuvreStart || e.kind == TraceEventKind::ManoeuvreEnd;
-    out += manoeuvre ? " nis_avg=" : " d2=";
+    const bool mode =
+        e.kind == TraceEventKind::ManoeuvreLikely || e.kind == TraceEventKind::ManoeuvreUnlikely;
+    out += manoeuvre ? " nis_avg=" : mode ? " p_manoeuvre=" : " d2=";
     append_double(out, e.distance2);
-    out += manoeuvre ? " threshold=" : " gate=";
+    out += manoeuvre || mode ? " threshold=" : " gate=";
     append_double(out, e.gate);
   }
   if (e.kind == TraceEventKind::Competed) {

@@ -82,6 +82,19 @@ std::optional<double> mahalanobis2(const ConstantVelocityFilter& f,
 //   * bearing-only: no screen (it would need the atan2 it is meant to save).
 // The bound is widened by a relative 1e-6 so floating-point rounding in the
 // full computation can never put a screened-out pair inside the limit.
+//
+// A track may carry several Gaussian components (the IMM's mode-matched
+// predictions (x_j, P_j), ADR 0014). Its gating statistic is the mixture
+// statistic d2_mix = -2 ln sum_j w_j exp(-d_j^2 / 2) with weights w_j >= 0
+// summing to 1 (estimation::TrackFilter::gate), and every d_j^2 is the
+// single-Gaussian distance above, computed with that mode's own position and
+// covariance. Since sum_j w_j exp(-d_j^2 / 2) <= exp(-min_j d_j^2 / 2),
+// d2_mix >= min_j d_j^2 (and the implementation clamps it to that bound, so
+// rounding cannot break it). Hence d2_mix <= limit implies d_j^2 <= limit for
+// some j, which by the argument above implies may_gate(p_j, lambda_j). The
+// engine therefore skips a pair only if may_gate is false for every
+// component: provably conservative for the mixture, and for one component
+// exactly the single-filter screen.
 struct GateScreen {
   enum class Kind : std::uint8_t { None, RangeBearing, Position };
   Kind kind = Kind::None;

@@ -26,6 +26,9 @@
 // Baseline when the bounds were set (GCC 13, default EngineConfig, q = 4):
 //   straight_crossing  filtered 11.1 m vs raw 22.2 m (0.50), velocity 2.4 m/s
 //   turn               filtered 10.7 m vs raw 14.9 m (0.72), velocity 5.3 m/s
+// The same bounds hold for the IMM (ADR 0014; both estimators run):
+//   straight_crossing  filtered 9.35 m (0.42), velocity 1.42 m/s
+//   turn               filtered 10.1 m (0.68), velocity 5.44 m/s
 // Sanity checks run against these bounds: dropping the bearing wrap in the EKF
 // innovation sends straight_crossing to ~10 km RMSE; ignoring sensor yaw sends
 // turn to ~1.3 km. Both fail by orders of magnitude, not by a hair.
@@ -139,9 +142,9 @@ struct Score {
   std::uint64_t tracks_started = 0;
 };
 
-Score run(const Scenario& sc) {
+Score run(const Scenario& sc, const EngineConfig& cfg) {
   Score s;
-  Engine engine(sc.sensors);
+  Engine engine(sc.sensors, cfg);
   EXPECT_EQ(sc.frames.size(), sc.truth.size());
   double sum_f = 0.0;
   double sum_r = 0.0;
@@ -195,27 +198,35 @@ struct Bounds {
   double max_velocity_rmse_mps;
 };
 
-void check(const std::string& name, const Bounds& b) {
-  const Scenario sc = load(name);
-  ASSERT_FALSE(sc.frames.empty());
-  const Score s = run(sc);
-  ASSERT_GT(s.scored, 50U);
-  // One target, one sensor, no clutter: association must never split it.
-  EXPECT_EQ(s.tracks_started, 1U);
-  std::printf(
-      "[ scenario ] %s: filtered %.2f m, raw %.2f m (ratio %.3f), velocity %.2f m/s, n=%zu\n",
-      name.c_str(), s.filtered_rmse, s.raw_rmse, s.filtered_rmse / s.raw_rmse, s.velocity_rmse,
-      s.scored);
-  EXPECT_LT(s.filtered_rmse / s.raw_rmse, b.max_ratio_to_raw);
-  EXPECT_LT(s.filtered_rmse, b.max_rmse_m);
-  EXPECT_LT(s.velocity_rmse, b.max_velocity_rmse_mps);
+// Both estimators against the same bounds: the IMM (the default, ADR 0014)
+// and the legacy constant-velocity filter the bounds were set with.
+void check(const std::string& scenario, const Bounds& b) {
+  for (const auto model :
+       {estimation::MotionModel::Imm, estimation::MotionModel::ConstantVelocity}) {
+    EngineConfig cfg;
+    cfg.motion_model = model;
+    const std::string name = scenario + " (" + std::string(estimation::to_string(model)) + ")";
+    const Scenario sc = load(scenario);
+    ASSERT_FALSE(sc.frames.empty());
+    const Score s = run(sc, cfg);
+    ASSERT_GT(s.scored, 50U);
+    // One target, one sensor, no clutter: association must never split it.
+    EXPECT_EQ(s.tracks_started, 1U);
+    std::printf(
+        "[ scenario ] %s: filtered %.2f m, raw %.2f m (ratio %.3f), velocity %.2f m/s, n=%zu\n",
+        name.c_str(), s.filtered_rmse, s.raw_rmse, s.filtered_rmse / s.raw_rmse, s.velocity_rmse,
+        s.scored);
+    EXPECT_LT(s.filtered_rmse / s.raw_rmse, b.max_ratio_to_raw);
+    EXPECT_LT(s.filtered_rmse, b.max_rmse_m);
+    EXPECT_LT(s.velocity_rmse, b.max_velocity_rmse_mps);
 
-  // Replaying the same frames gives bit-identical estimates (ADR 0002).
-  const Score again = run(sc);
-  ASSERT_EQ(again.estimates.size(), s.estimates.size());
-  for (std::size_t i = 0; i < s.estimates.size(); ++i) {
-    ASSERT_TRUE(again.estimates[i].state == s.estimates[i].state) << "estimate " << i;
-    ASSERT_TRUE(again.estimates[i].covariance == s.estimates[i].covariance) << "estimate " << i;
+    // Replaying the same frames gives bit-identical estimates (ADR 0002).
+    const Score again = run(sc, cfg);
+    ASSERT_EQ(again.estimates.size(), s.estimates.size());
+    for (std::size_t i = 0; i < s.estimates.size(); ++i) {
+      ASSERT_TRUE(again.estimates[i].state == s.estimates[i].state) << "estimate " << i;
+      ASSERT_TRUE(again.estimates[i].covariance == s.estimates[i].covariance) << "estimate " << i;
+    }
   }
 }
 
