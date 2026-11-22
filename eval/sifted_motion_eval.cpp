@@ -320,15 +320,31 @@ std::string markdown(const Options& o, const std::map<std::string, std::string>&
       "(cd sim && python3 -m sifted_sim.manoeuvres evaluation ../build/release/manoeuvres-eval)\n"
       "build/release/eval/sifted_motion_eval";
   for (const std::string& a : o.args) {
-    out += " " + a;
+    out += a.find(' ') == std::string::npos ? " " + a : " \"" + a + "\"";
   }
-  out += "\n```\n\n" + std::to_string(dirs.size()) +
-         " scenario runs per model. The manoeuvre set (`manoeuvre_<load>g_<speed>mps`, 10 noise "
-         "seeds each, `sim/sifted_sim/manoeuvres.py`): one radar at the origin (10 m, 0.2 deg, "
-         "1 Hz, Pd 0.9, 0.5 clutter points per scan, 60 km), one target from (-6000, 15000) m "
-         "flying east: 30 s straight, a right turn of min(180 deg / rate, 40 s), 30 s straight. "
-         "Its seeds and turn profiles are disjoint from the tuning set the parameters were "
-         "checked on (ADR 0014).\n\n";
+  out += "\n```\n\n";
+  out +=
+      "## Models compared\n\n"
+      "| | `cv` (legacy) | `imm` (default since ADR 0014) |\n|---|---|---|\n"
+      "| state | `[px, py, vx, vy]` | the same, in each of three modes |\n"
+      "| motion | one constant-velocity model, white-noise acceleration q = 4 m^2/s^3, x10 "
+      "while a fading-memory NIS detector reports a manoeuvre | quiet / manoeuvre / hard "
+      "constant-velocity modes, switched by a continuous-time Markov chain |\n"
+      "| update | Joseph-form EKF | Joseph-form EKF per mode, each linearised at its own state; "
+      "log-space mode likelihoods |\n"
+      "| gate and cost | d^2 under the filter's prediction | the mixture statistic over the "
+      "modes (ADR 0014) |\n"
+      "| reported estimate | the filter's | the moment-matched combination of the modes |\n\n"
+      "Everything else (gate probability, global nearest neighbour, lifecycle, sensors) is the "
+      "same. Old recordings replay with `cv`.\n\n"
+      "## Method\n\n" +
+      std::to_string(dirs.size()) +
+      " scenario runs per model. The manoeuvre set (`manoeuvre_<load>g_<speed>mps`, 10 noise "
+      "seeds each, `sim/sifted_sim/manoeuvres.py`): one radar at the origin (10 m, 0.2 deg, "
+      "1 Hz, Pd 0.9, 0.5 clutter points per scan, 60 km), one target from (-6000, 15000) m "
+      "flying east: 30 s straight, a right turn of min(180 deg / rate, 40 s), 30 s straight. "
+      "Its seeds and turn profiles are disjoint from the tuning set the parameters were "
+      "checked on (ADR 0014).\n\n";
   out += "`cv`: the legacy constant-velocity filter with NIS-switched process noise. ";
   out += "`imm`: the IMM (ADR 0014) with q = ";
   const auto& m = o.imm.imm.model;
@@ -338,7 +354,17 @@ std::string markdown(const Options& o, const std::map<std::string, std::string>&
   out +=
       "Direct engine feed, default configuration otherwise. Per condition, averages over its "
       "runs: ID switches and false tracks per run, missed target-instants (mean of per-run "
-      "percentages), mean per-target position and velocity RMSE.\n\n";
+      "percentages), mean per-target position and velocity RMSE.\n\n"
+      "Metrics follow the scorecard (CLEAR-MOT style, 100 m match distance; "
+      "eval/sifted/eval/scenario.hpp). An ID switch is a target matched to a different track "
+      "than before, usually because the original track lost the target and a new one was "
+      "started. A missed target-instant is a covered target with no matched track. At 15-25 km "
+      "one radar measurement's cross-range error is 50-90 m, so part of the remaining misses "
+      "are instants where the estimate is further than 100 m from the truth. NEES and NIS test "
+      "the reported covariance (below). The fixture rows are single noise realisations; the "
+      "Monte Carlo evaluation ([evaluation-monte-carlo.md](evaluation-monte-carlo.md)) scores "
+      "them over many.\n\n"
+      "## Results\n\n";
   out +=
       "| Condition | Runs | ID sw cv | ID sw imm | Missed cv | Missed imm | False cv | False imm "
       "| RMSE cv [m] | RMSE imm [m] | Vel RMSE cv [m/s] | Vel RMSE imm [m/s] |\n";
@@ -388,6 +414,77 @@ std::string markdown(const Options& o, const std::map<std::string, std::string>&
   out += "\nPhases come from the truth: `turn` when the true velocity changes by more than " +
          fixed(kTurnAccel, 1) + " m/s^2, `onset` / `exit` the first " + fixed(kPhaseS, 0) +
          " s of a turn / of the straight flight after it.\n";
+
+  // ---- findings, computed from the tables above ------------------------------
+  out += "\n## Findings\n\n";
+  // ADR 0014's target: at most about 0.2 ID switches per run through 3 g.
+  constexpr double kTargetSwitches = 0.2;
+  constexpr double kTargetLoadG = 3.0;
+  std::map<double, std::pair<double, double>> worst;  // speed -> (cv, imm) through 3 g
+  std::map<double, double> first_miss;                // speed -> lowest load above target (imm)
+  std::size_t fixtures = 0;
+  std::size_t fixtures_better = 0;
+  for (const std::string& c : conds) {
+    const auto [kind, v, g, name] = sort_key(c);
+    const Totals& a = cv.by_condition.at(c);
+    const Totals& b = imm.by_condition.at(c);
+    const double n = static_cast<double>(a.runs);
+    if (kind == 0) {
+      if (g <= kTargetLoadG) {
+        auto& w = worst[v];
+        w.first = std::max(w.first, a.id_switches / n);
+        w.second = std::max(w.second, b.id_switches / n);
+      }
+      if (b.id_switches / n > kTargetSwitches && first_miss.count(v) == 0) {
+        first_miss[v] = g;
+      }
+    } else if (a.rmse_runs > 0 && b.rmse_runs > 0) {
+      ++fixtures;
+      fixtures_better +=
+          b.rmse / static_cast<double>(b.rmse_runs) < a.rmse / static_cast<double>(a.rmse_runs)
+              ? 1U
+              : 0U;
+    }
+  }
+  for (const auto& [v, w] : worst) {
+    out += "- **Identity through " + fixed(kTargetLoadG, 0) + " g at " + fixed(v, 0) +
+           " m/s:** at most " + fixed(w.second, 1) + " ID switches per run with `imm`, " +
+           fixed(w.first, 1) + " with `cv`. Target (at most about " + fixed(kTargetSwitches, 1) +
+           "): **" + (w.second <= kTargetSwitches ? "met" : "not met") + "**";
+    if (const auto it = first_miss.find(v); it != first_miss.end()) {
+      out += "; `imm` first exceeds it at " + fixed(it->second, 1) + " g";
+    }
+    out += ".\n";
+  }
+  if (fixtures > 0) {
+    out += "- **Fixtures:** `imm` has the lower mean position RMSE on " +
+           std::to_string(fixtures_better) + " of " + std::to_string(fixtures) +
+           " single-realisation fixtures.\n";
+  }
+  const ChiSquareStat& sc = cv.manoeuvre.nees[kStraight];
+  const ChiSquareStat& si = imm.manoeuvre.nees[kStraight];
+  const ChiSquareStat& tc = cv.manoeuvre.nees[kTurn];
+  const ChiSquareStat& ti = imm.manoeuvre.nees[kTurn];
+  if (sc.n && si.n && tc.n && ti.n) {
+    out += "- **Consistency:** in turns NEES4 goes from " + fixed(tc.average(), 1) + " to " +
+           fixed(ti.average(), 1) + " (expected 4). In straight flight it goes from " +
+           fixed(sc.average(), 2) + " to " + fixed(si.average(), 2) +
+           ": the IMM does not make straight flight honest. The simulator's straight legs have "
+           "exactly zero acceleration, so any filter that budgets for manoeuvres is pessimistic "
+           "there, and the mixed-in manoeuvre modes add to that budget (docs/design.md "
+           "section 7).\n";
+  }
+  out +=
+      "\n## Costs, measured elsewhere\n\n"
+      "- **Compute:** per-scan time, throughput and tracks per core for both estimators on the "
+      "same machine: [benchmarks.md](benchmarks.md).\n"
+      "- **Clutter:** the IMM confirms more false tracks than a constant-velocity tracker as "
+      "clutter rises: [evaluation-baseline.md](evaluation-baseline.md) and "
+      "[evaluation-monte-carlo.md](evaluation-monte-carlo.md).\n"
+      "- **Dense formations and gating:** identity in a 45 m formation over re-seeded fixtures, "
+      "the gating statistics compared on separate selection sets, and the engine-level loss "
+      "rate on the IMM's own matched model: [ADR 0014](adr/0014-imm-motion-model.md) and "
+      "`ConsistencyMonteCarlo.ImmMatchedModelIsNearlyConsistent`.\n";
   return out;
 }
 

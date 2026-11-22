@@ -18,10 +18,10 @@ The page is a deterministic function of the cached data and the binaries: runnin
 
 ## Summary (held-out flights)
 
-- **Prediction (A).** Median error of the tracker's estimate at a withheld report 7.5 m at 2–5 s horizons (dead reckoning 7.2 m), 35.0 m at 20–40 s (dead reckoning 25.8 m, holding the last report 5257.5 m) and 83.7 m at 40–80 s (dead reckoning 69.1 m).
-- **Consistency (A).** Average NIS of real ADS-B updates 0.13 (2.00 expected for a consistent filter; 95% interval under independence [1.97, 2.03]) with the assumed 50 m ADS-B sigma: not consistent, innovations 0.26x the size the filter predicts.
-- **Continuity (A).** 19 held-out engine runs (5 aircraft): 19 confirmed tracks, 0 fragmentations, 0 identity swaps (none possible: one aircraft per run), coverage 100.0% of reports after confirmation. At the live REST cadence (21.6 s polls, 5.4% of the reports): 8 fragmentations, coverage 97.5%.
-- **Real motion, simulated sensors (B).** Position RMSE per window: median 15.2 m, p95 36.6 m, against 13.4 m / 15.2 m for the same sensors on a constant-velocity path; real motion accounts for 52% of the mean squared error. Truth quality limits this: leave-one-out interpolation error p95 27.4 m.
+- **Prediction (A).** Median error of the tracker's estimate at a withheld report 8.8 m at 2–5 s horizons (dead reckoning 7.2 m), 36.1 m at 20–40 s (dead reckoning 25.8 m, holding the last report 5257.5 m) and 93.5 m at 40–80 s (dead reckoning 69.1 m).
+- **Consistency (A).** Average NIS of real ADS-B updates 0.11 (2.00 expected for a consistent filter; 95% interval under independence [1.97, 2.03]) with the assumed 50 m ADS-B sigma: not consistent, innovations 0.23x the size the filter predicts.
+- **Continuity (A).** 19 held-out engine runs (5 aircraft): 19 confirmed tracks, 0 fragmentations, 0 identity swaps (none possible: one aircraft per run), coverage 100.0% of reports after confirmation. At the live REST cadence (21.6 s polls, 5.4% of the reports): 2 fragmentations, coverage 99.6%.
+- **Real motion, simulated sensors (B).** Position RMSE per window: median 13.8 m, p95 21.7 m, against 11.6 m / 13.4 m for the same sensors on a constant-velocity path; real motion accounts for 42% of the mean squared error. Truth quality limits this: leave-one-out interpolation error p95 27.4 m.
 
 Unfavourable findings are listed under [Findings](#findings) and [Limitations](#limitations).
 
@@ -78,7 +78,7 @@ Parameters: `MAX_SPEED_MPS` = 400, `JUMP_SLACK_M` = 200, `JUMP_RESET` = 5, `MAX_
 
 **Selection.** Every flight that survives cleaning is used; none is chosen by hand. Flights are numbered by start time and every 3rd (F01, F04, ...) forms the tuning portion; the rest are held out. No tracker parameter is tuned at all; the two choices made from data, the interpolation method of evaluation B and the diagnostic sigma of evaluation A, are made on the tuning flights only. Headline numbers are held-out.
 
-**Evaluation A.** Engine runs are flight chunks whose reports all lie within 300 km of the run's tangent-plane origin (its first report); chunks that overlap in time and fit within that radius share a run. The furthest report from an origin in these data is 300 km; at that range the flat-plane distortion of a straight constant-speed path is below 0.1% of its speed, far under the measurement noise. Engine configuration: the launcher's ADS-B settings (`--initial-velocity-sigma 250 --tentative-timeout 90 --coast-after 60 --drop-after 180 --max-position-sigma 10000`; `app/launcher.py` `ADSB_TRACKER_ARGS`), assumed sigma 50 m (`sifted_sim.adsb`). Feeds:
+**Evaluation A.** Engine runs are flight chunks whose reports all lie within 300 km of the run's tangent-plane origin (its first report); chunks that overlap in time and fit within that radius share a run. The furthest report from an origin in these data is 300 km; at that range the flat-plane distortion of a straight constant-speed path is below 0.1% of its speed, far under the measurement noise. Engine configuration: the launcher's ADS-B settings (`--initial-velocity-sigma 250 --tentative-timeout 90 --coast-after 60 --drop-after 180 --max-position-sigma 10000`; `app/launcher.py` `ADSB_TRACKER_ARGS`), assumed sigma 50 m (`sifted_sim.adsb`). The estimator is the `EngineConfig` default, the IMM (ADR 0014); evaluation B's `sifted_eval` runs use the same default. Feeds:
 
 - *all*: every cleaned report, at its millisecond position time (`lastposupdate`), nothing withheld. Continuity and NIS come from this feed.
 - *withheld*: the same, minus the withheld reports: after 120 s, gaps of 2, 5, 10, 20, 40, 80 s in turn, each followed by 60 s of fed reports. Prediction errors come from this feed.
@@ -111,33 +111,33 @@ Metres: n, median / p95 / p99. *no track*: withheld reports at which the tracker
 
 | feed | horizon s | tracker | dead reckoning | hold last report |
 |---|---|---|---|---|
-| withheld | all | 5539: 23.6 / 584.8 / 1832.3 | 5539: 18.1 / 437.5 / 1223.7 | 5539: 3215.8 / 14552.5 / 18438.5 |
-| withheld | 0–2 | 319: 7.1 / 36.5 / 72.0 | 319: 7.0 / 30.6 / 50.4 | 319: 211.5 / 469.3 / 505.8 |
-| withheld | 2–5 | 593: 7.5 / 52.2 / 94.0 | 593: 7.2 / 33.4 / 71.4 | 593: 570.9 / 1056.0 / 1209.7 |
-| withheld | 5–10 | 762: 10.4 / 79.5 / 218.8 | 762: 9.1 / 44.4 / 98.5 | 762: 1303.2 / 2166.4 / 2464.7 |
-| withheld | 10–20 | 1133: 17.5 / 155.8 / 595.1 | 1133: 13.1 / 93.1 / 252.2 | 1133: 2605.3 / 4314.1 / 4784.5 |
-| withheld | 20–40 | 1385: 35.0 / 526.2 / 1543.0 | 1385: 25.8 / 380.4 / 782.4 | 1385: 5257.5 / 8729.1 / 9636.2 |
-| withheld | 40–80 | 1300: 83.7 / 1648.5 / 3703.6 | 1300: 69.1 / 1085.6 / 1985.0 | 1300: 10389.4 / 17059.0 / 19202.5 |
-| withheld | 80–160 | 47: 88.7 / 1891.8 / 5167.4 | 47: 168.9 / 1109.4 / 3051.6 | 47: 19325.9 / 23348.3 / 23886.9 |
+| withheld | all | 5539: 23.8 / 599.7 / 1679.7 | 5539: 18.1 / 437.5 / 1223.7 | 5539: 3215.8 / 14552.5 / 18438.5 |
+| withheld | 0–2 | 319: 8.4 / 36.4 / 55.2 | 319: 7.0 / 30.6 / 50.4 | 319: 211.5 / 469.3 / 505.8 |
+| withheld | 2–5 | 593: 8.8 / 51.8 / 94.4 | 593: 7.2 / 33.4 / 71.4 | 593: 570.9 / 1056.0 / 1209.7 |
+| withheld | 5–10 | 762: 11.7 / 80.0 / 177.8 | 762: 9.1 / 44.4 / 98.5 | 762: 1303.2 / 2166.4 / 2464.7 |
+| withheld | 10–20 | 1133: 18.1 / 160.1 / 478.7 | 1133: 13.1 / 93.1 / 252.2 | 1133: 2605.3 / 4314.1 / 4784.5 |
+| withheld | 20–40 | 1385: 36.1 / 497.9 / 1293.7 | 1385: 25.8 / 380.4 / 782.4 | 1385: 5257.5 / 8729.1 / 9636.2 |
+| withheld | 40–80 | 1300: 93.5 / 1510.2 / 2799.5 | 1300: 69.1 / 1085.6 / 1985.0 | 1300: 10389.4 / 17059.0 / 19202.5 |
+| withheld | 80–160 | 47: 377.4 / 1578.2 / 4169.3 | 47: 168.9 / 1109.4 / 3051.6 | 47: 19325.9 / 23348.3 / 23886.9 |
 | withheld | no track | 0 of 5539 withheld | 0 without velocity | – |
-| poll withheld | all | 5436: 157.1 / 960.9 / 2804.3 | 5539: 135.9 / 687.7 / 1807.9 | 5539: 4964.5 / 16552.5 / 21434.2 |
-| poll withheld | 0–2 | 11: 117.9 / 248.6 / 248.6 | 12: 104.7 / 249.1 / 249.1 | 12: 195.2 / 369.1 / 369.1 |
-| poll withheld | 2–5 | 44: 126.2 / 241.5 / 256.2 | 47: 101.2 / 237.8 / 255.4 | 47: 476.4 / 960.4 / 999.2 |
-| poll withheld | 5–10 | 254: 113.6 / 254.0 / 424.3 | 261: 99.0 / 224.5 / 250.5 | 261: 1260.3 / 2180.1 / 2351.4 |
-| poll withheld | 10–20 | 1309: 127.0 / 311.7 / 610.7 | 1325: 127.2 / 231.6 / 297.3 | 1325: 2544.8 / 4206.4 / 4651.3 |
-| poll withheld | 20–40 | 1891: 148.5 / 514.8 / 1418.5 | 1926: 136.4 / 356.8 / 789.0 | 1926: 5132.8 / 8360.8 / 9415.8 |
-| poll withheld | 40–80 | 1537: 193.4 / 1908.2 / 4260.3 | 1577: 154.0 / 1010.6 / 2055.9 | 1577: 9770.2 / 16712.7 / 19014.9 |
-| poll withheld | 80–160 | 390: 309.3 / 2850.5 / 3567.3 | 391: 229.2 / 2345.7 / 2966.4 | 391: 16027.5 / 23421.2 / 24790.0 |
-| poll withheld | no track | 103 of 5539 withheld | 0 without velocity | – |
-| withheld, sigma 6.8 m | all | 5533: 35.6 / 548.8 / 1370.4 | 5539: 18.1 / 437.5 / 1223.7 | 5539: 3215.8 / 14552.5 / 18438.5 |
-| withheld, sigma 6.8 m | 0–2 | 316: 7.4 / 34.4 / 44.3 | 319: 7.0 / 30.6 / 50.4 | 319: 211.5 / 469.3 / 505.8 |
-| withheld, sigma 6.8 m | 2–5 | 591: 9.2 / 42.5 / 69.4 | 593: 7.2 / 33.4 / 71.4 | 593: 570.9 / 1056.0 / 1209.7 |
-| withheld, sigma 6.8 m | 5–10 | 761: 14.8 / 82.5 / 149.5 | 762: 9.1 / 44.4 / 98.5 | 762: 1303.2 / 2166.4 / 2464.7 |
-| withheld, sigma 6.8 m | 10–20 | 1133: 27.1 / 162.0 / 360.9 | 1133: 13.1 / 93.1 / 252.2 | 1133: 2605.3 / 4314.1 / 4784.5 |
-| withheld, sigma 6.8 m | 20–40 | 1385: 58.2 / 461.4 / 977.9 | 1385: 25.8 / 380.4 / 782.4 | 1385: 5257.5 / 8729.1 / 9636.2 |
-| withheld, sigma 6.8 m | 40–80 | 1300: 142.4 / 1246.1 / 2240.6 | 1300: 69.1 / 1085.6 / 1985.0 | 1300: 10389.4 / 17059.0 / 19202.5 |
-| withheld, sigma 6.8 m | 80–160 | 47: 170.1 / 1370.4 / 3549.4 | 47: 168.9 / 1109.4 / 3051.6 | 47: 19325.9 / 23348.3 / 23886.9 |
-| withheld, sigma 6.8 m | no track | 6 of 5539 withheld | 0 without velocity | – |
+| poll withheld | all | 5519: 146.9 / 949.6 / 2657.4 | 5539: 135.9 / 687.7 / 1807.9 | 5539: 4964.5 / 16552.5 / 21434.2 |
+| poll withheld | 0–2 | 12: 118.8 / 245.1 / 245.1 | 12: 104.7 / 249.1 / 249.1 | 12: 195.2 / 369.1 / 369.1 |
+| poll withheld | 2–5 | 47: 129.6 / 236.3 / 252.2 | 47: 101.2 / 237.8 / 255.4 | 47: 476.4 / 960.4 / 999.2 |
+| poll withheld | 5–10 | 261: 120.2 / 254.5 / 449.8 | 261: 99.0 / 224.5 / 250.5 | 261: 1260.3 / 2180.1 / 2351.4 |
+| poll withheld | 10–20 | 1321: 129.0 / 296.2 / 547.9 | 1325: 127.2 / 231.6 / 297.3 | 1325: 2544.8 / 4206.4 / 4651.3 |
+| poll withheld | 20–40 | 1910: 138.2 / 528.5 / 1358.4 | 1926: 136.4 / 356.8 / 789.0 | 1926: 5132.8 / 8360.8 / 9415.8 |
+| poll withheld | 40–80 | 1577: 174.7 / 1828.7 / 4059.5 | 1577: 154.0 / 1010.6 / 2055.9 | 1577: 9770.2 / 16712.7 / 19014.9 |
+| poll withheld | 80–160 | 391: 313.0 / 2744.1 / 3444.4 | 391: 229.2 / 2345.7 / 2966.4 | 391: 16027.5 / 23421.2 / 24790.0 |
+| poll withheld | no track | 20 of 5539 withheld | 0 without velocity | – |
+| withheld, sigma 6.8 m | all | 5530: 29.5 / 656.1 / 1505.1 | 5539: 18.1 / 437.5 / 1223.7 | 5539: 3215.8 / 14552.5 / 18438.5 |
+| withheld, sigma 6.8 m | 0–2 | 317: 7.2 / 38.7 / 76.8 | 319: 7.0 / 30.6 / 50.4 | 319: 211.5 / 469.3 / 505.8 |
+| withheld, sigma 6.8 m | 2–5 | 592: 7.9 / 44.7 / 141.8 | 593: 7.2 / 33.4 / 71.4 | 593: 570.9 / 1056.0 / 1209.7 |
+| withheld, sigma 6.8 m | 5–10 | 761: 12.3 / 81.9 / 208.7 | 762: 9.1 / 44.4 / 98.5 | 762: 1303.2 / 2166.4 / 2464.7 |
+| withheld, sigma 6.8 m | 10–20 | 1131: 19.5 / 170.8 / 420.0 | 1133: 13.1 / 93.1 / 252.2 | 1133: 2605.3 / 4314.1 / 4784.5 |
+| withheld, sigma 6.8 m | 20–40 | 1382: 47.6 / 525.2 / 969.7 | 1385: 25.8 / 380.4 / 782.4 | 1385: 5257.5 / 8729.1 / 9636.2 |
+| withheld, sigma 6.8 m | 40–80 | 1300: 119.1 / 1389.7 / 2114.3 | 1300: 69.1 / 1085.6 / 1985.0 | 1300: 10389.4 / 17059.0 / 19202.5 |
+| withheld, sigma 6.8 m | 80–160 | 47: 249.5 / 1699.0 / 3375.0 | 47: 168.9 / 1109.4 / 3051.6 | 47: 19325.9 / 23348.3 / 23886.9 |
+| withheld, sigma 6.8 m | no track | 9 of 5539 withheld | 0 without velocity | – |
 
 ### Prediction error at withheld reports, tuning (for comparison)
 
@@ -145,33 +145,33 @@ Metres: n, median / p95 / p99. *no track*: withheld reports at which the tracker
 
 | feed | horizon s | tracker | dead reckoning | hold last report |
 |---|---|---|---|---|
-| withheld | all | 4692: 55.4 / 1478.0 / 4519.6 | 4692: 38.9 / 1391.4 / 4052.9 | 4692: 4274.2 / 16327.1 / 19270.1 |
-| withheld | 0–2 | 259: 16.4 / 72.5 / 113.7 | 259: 12.7 / 62.2 / 117.3 | 259: 255.8 / 476.0 / 541.1 |
-| withheld | 2–5 | 490: 17.4 / 100.0 / 166.8 | 490: 14.1 / 61.6 / 102.7 | 490: 702.9 / 1146.2 / 1265.6 |
-| withheld | 5–10 | 659: 25.0 / 187.1 / 365.8 | 659: 16.4 / 104.4 / 212.3 | 659: 1570.8 / 2349.4 / 2599.7 |
-| withheld | 10–20 | 931: 45.9 / 377.9 / 905.6 | 931: 29.7 / 200.6 / 688.2 | 931: 3179.2 / 4726.6 / 5212.0 |
-| withheld | 20–40 | 1204: 106.2 / 1409.2 / 2534.4 | 1204: 69.9 / 1095.6 / 2210.6 | 1204: 6335.7 / 9386.8 / 10315.1 |
-| withheld | 40–80 | 1126: 264.1 / 4043.0 / 6872.4 | 1126: 232.6 / 3683.4 / 6186.5 | 1126: 12703.8 / 18720.3 / 20714.6 |
-| withheld | 80–160 | 23: 467.0 / 1075.4 / 3527.1 | 23: 416.0 / 1241.8 / 3553.4 | 23: 17666.2 / 21358.6 / 21787.2 |
+| withheld | all | 4692: 56.6 / 1534.4 / 4563.4 | 4692: 38.9 / 1391.4 / 4052.9 | 4692: 4274.2 / 16327.1 / 19270.1 |
+| withheld | 0–2 | 259: 19.5 / 62.5 / 90.9 | 259: 12.7 / 62.2 / 117.3 | 259: 255.8 / 476.0 / 541.1 |
+| withheld | 2–5 | 490: 18.6 / 85.4 / 145.7 | 490: 14.1 / 61.6 / 102.7 | 490: 702.9 / 1146.2 / 1265.6 |
+| withheld | 5–10 | 659: 26.1 / 168.1 / 381.4 | 659: 16.4 / 104.4 / 212.3 | 659: 1570.8 / 2349.4 / 2599.7 |
+| withheld | 10–20 | 931: 46.7 / 383.4 / 909.3 | 931: 29.7 / 200.6 / 688.2 | 931: 3179.2 / 4726.6 / 5212.0 |
+| withheld | 20–40 | 1204: 108.6 / 1531.0 / 2686.4 | 1204: 69.9 / 1095.6 / 2210.6 | 1204: 6335.7 / 9386.8 / 10315.1 |
+| withheld | 40–80 | 1126: 275.2 / 4196.8 / 6930.2 | 1126: 232.6 / 3683.4 / 6186.5 | 1126: 12703.8 / 18720.3 / 20714.6 |
+| withheld | 80–160 | 23: 400.3 / 997.2 / 3518.3 | 23: 416.0 / 1241.8 / 3553.4 | 23: 17666.2 / 21358.6 / 21787.2 |
 | withheld | no track | 0 of 4692 withheld | 0 without velocity | – |
-| poll withheld | all | 4388: 238.3 / 2287.5 / 6514.5 | 4692: 184.7 / 1699.3 / 5692.5 | 4692: 6524.4 / 19373.0 / 22977.8 |
-| poll withheld | 0–2 | 7: 95.0 / 140.8 / 140.8 | 7: 94.1 / 146.8 / 146.8 | 7: 227.4 / 432.9 / 432.9 |
-| poll withheld | 2–5 | 37: 118.0 / 214.8 / 227.3 | 37: 117.8 / 202.5 / 209.4 | 37: 637.6 / 1099.2 / 1138.9 |
-| poll withheld | 5–10 | 173: 132.0 / 286.6 / 332.4 | 185: 131.8 / 233.2 / 333.0 | 185: 1737.8 / 2409.0 / 2610.7 |
-| poll withheld | 10–20 | 1031: 163.4 / 413.6 / 617.9 | 1113: 149.2 / 296.8 / 512.9 | 1113: 3072.5 / 4611.2 / 5050.0 |
-| poll withheld | 20–40 | 1574: 220.9 / 1143.0 / 2502.0 | 1656: 174.7 / 854.1 / 1981.3 | 1656: 6170.4 / 9227.0 / 10143.2 |
-| poll withheld | 40–80 | 1298: 444.0 / 4825.7 / 8859.1 | 1385: 257.4 / 4153.2 / 7100.3 | 1385: 11794.0 / 18493.2 / 20630.5 |
-| poll withheld | 80–160 | 268: 672.1 / 7254.6 / 9664.1 | 309: 434.2 / 4365.8 / 9654.4 | 309: 20402.8 / 24659.6 / 26546.0 |
-| poll withheld | no track | 304 of 4692 withheld | 0 without velocity | – |
-| withheld, sigma 6.8 m | all | 4577: 66.6 / 1500.2 / 4150.1 | 4692: 38.9 / 1391.4 / 4052.9 | 4692: 4274.2 / 16327.1 / 19270.1 |
-| withheld, sigma 6.8 m | 0–2 | 254: 14.0 / 58.8 / 93.1 | 259: 12.7 / 62.2 / 117.3 | 259: 255.8 / 476.0 / 541.1 |
-| withheld, sigma 6.8 m | 2–5 | 477: 17.9 / 71.2 / 94.1 | 490: 14.1 / 61.6 / 102.7 | 490: 702.9 / 1146.2 / 1265.6 |
-| withheld, sigma 6.8 m | 5–10 | 642: 24.3 / 119.3 / 229.8 | 659: 16.4 / 104.4 / 212.3 | 659: 1570.8 / 2349.4 / 2599.7 |
-| withheld, sigma 6.8 m | 10–20 | 911: 46.3 / 262.6 / 690.4 | 931: 29.7 / 200.6 / 688.2 | 931: 3179.2 / 4726.6 / 5212.0 |
-| withheld, sigma 6.8 m | 20–40 | 1184: 104.3 / 1203.2 / 2296.6 | 1204: 69.9 / 1095.6 / 2210.6 | 1204: 6335.7 / 9386.8 / 10315.1 |
-| withheld, sigma 6.8 m | 40–80 | 1087: 340.0 / 3790.9 / 6407.2 | 1126: 232.6 / 3683.4 / 6186.5 | 1126: 12703.8 / 18720.3 / 20714.6 |
-| withheld, sigma 6.8 m | 80–160 | 22: 551.0 / 1210.8 / 3533.2 | 23: 416.0 / 1241.8 / 3553.4 | 23: 17666.2 / 21358.6 / 21787.2 |
-| withheld, sigma 6.8 m | no track | 115 of 4692 withheld | 0 without velocity | – |
+| poll withheld | all | 4605: 245.1 / 2227.4 / 6351.5 | 4692: 184.7 / 1699.3 / 5692.5 | 4692: 6524.4 / 19373.0 / 22977.8 |
+| poll withheld | 0–2 | 7: 108.2 / 145.5 / 145.5 | 7: 94.1 / 146.8 / 146.8 | 7: 227.4 / 432.9 / 432.9 |
+| poll withheld | 2–5 | 37: 122.3 / 215.2 / 224.1 | 37: 117.8 / 202.5 / 209.4 | 37: 637.6 / 1099.2 / 1138.9 |
+| poll withheld | 5–10 | 185: 135.3 / 281.1 / 351.8 | 185: 131.8 / 233.2 / 333.0 | 185: 1737.8 / 2409.0 / 2610.7 |
+| poll withheld | 10–20 | 1103: 170.8 / 430.9 / 767.4 | 1113: 149.2 / 296.8 / 512.9 | 1113: 3072.5 / 4611.2 / 5050.0 |
+| poll withheld | 20–40 | 1639: 225.0 / 1083.4 / 2442.7 | 1656: 174.7 / 854.1 / 1981.3 | 1656: 6170.4 / 9227.0 / 10143.2 |
+| poll withheld | 40–80 | 1346: 413.3 / 4714.5 / 8739.0 | 1385: 257.4 / 4153.2 / 7100.3 | 1385: 11794.0 / 18493.2 / 20630.5 |
+| poll withheld | 80–160 | 288: 602.6 / 5976.2 / 9654.0 | 309: 434.2 / 4365.8 / 9654.4 | 309: 20402.8 / 24659.6 / 26546.0 |
+| poll withheld | no track | 87 of 4692 withheld | 0 without velocity | – |
+| withheld, sigma 6.8 m | all | 4684: 60.0 / 1480.5 / 3967.5 | 4692: 38.9 / 1391.4 / 4052.9 | 4692: 4274.2 / 16327.1 / 19270.1 |
+| withheld, sigma 6.8 m | 0–2 | 256: 13.2 / 65.3 / 126.6 | 259: 12.7 / 62.2 / 117.3 | 259: 255.8 / 476.0 / 541.1 |
+| withheld, sigma 6.8 m | 2–5 | 486: 17.3 / 78.8 / 152.1 | 490: 14.1 / 61.6 / 102.7 | 490: 702.9 / 1146.2 / 1265.6 |
+| withheld, sigma 6.8 m | 5–10 | 658: 24.1 / 141.8 / 255.2 | 659: 16.4 / 104.4 / 212.3 | 659: 1570.8 / 2349.4 / 2599.7 |
+| withheld, sigma 6.8 m | 10–20 | 931: 48.0 / 322.7 / 678.1 | 931: 29.7 / 200.6 / 688.2 | 931: 3179.2 / 4726.6 / 5212.0 |
+| withheld, sigma 6.8 m | 20–40 | 1204: 109.6 / 1125.6 / 2171.2 | 1204: 69.9 / 1095.6 / 2210.6 | 1204: 6335.7 / 9386.8 / 10315.1 |
+| withheld, sigma 6.8 m | 40–80 | 1126: 356.7 / 3607.4 / 5765.8 | 1126: 232.6 / 3683.4 / 6186.5 | 1126: 12703.8 / 18720.3 / 20714.6 |
+| withheld, sigma 6.8 m | 80–160 | 23: 566.6 / 1143.8 / 3536.7 | 23: 416.0 / 1241.8 / 3553.4 | 23: 17666.2 / 21358.6 / 21787.2 |
+| withheld, sigma 6.8 m | no track | 8 of 4692 withheld | 0 without velocity | – |
 
 ### Consistency and continuity
 
@@ -179,14 +179,14 @@ NIS: average normalised innovation squared of geodetic updates after each track'
 
 | portion | feed | runs | aircraft | reports fed | tracks started | confirmed | fragmentations | never confirmed | swaps | mixed | inconsistent | coverage | NIS (n) | engine out-of-order |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|
-| heldout | all | 19 | 5 | 21037 | 21 | 19 | 0 | 0 | 0 | 0 | 0 | 100.0% | 0.13 (20824) | 0 |
-| heldout | poll | 19 | 5 | 1137 | 34 | 27 | 8 | 0 | 0 | 0 | 0 | 97.5% | 0.53 (861) | 0 |
-| heldout | all, default config | 19 | 5 | 21037 | 146 | 61 | 42 | 0 | 0 | 0 | 0 | 99.1% | 0.13 (20359) | 0 |
-| heldout | all, sigma 6.8 m | 19 | 5 | 21037 | 80 | 50 | 31 | 0 | 0 | 0 | 0 | 99.5% | 0.82 (20484) | 0 |
-| tuning | all | 16 | 4 | 17518 | 29 | 26 | 10 | 0 | 0 | 0 | 0 | 99.9% | 0.28 (17236) | 0 |
-| tuning | poll | 16 | 4 | 977 | 52 | 38 | 23 | 1 | 0 | 0 | 0 | 92.5% | 0.95 (601) | 0 |
-| tuning | all, default config | 16 | 4 | 17518 | 94 | 50 | 34 | 0 | 0 | 0 | 0 | 99.3% | 0.28 (16966) | 0 |
-| tuning | all, sigma 6.8 m | 16 | 4 | 17518 | 139 | 72 | 56 | 0 | 0 | 0 | 0 | 98.9% | 1.33 (16713) | 0 |
+| heldout | all | 19 | 5 | 21037 | 20 | 19 | 0 | 0 | 0 | 0 | 0 | 100.0% | 0.11 (20826) | 0 |
+| heldout | poll | 19 | 5 | 1137 | 21 | 21 | 2 | 0 | 0 | 0 | 0 | 99.6% | 0.83 (906) | 0 |
+| heldout | all, default config | 19 | 5 | 21037 | 146 | 61 | 42 | 0 | 0 | 0 | 0 | 99.1% | 0.10 (20359) | 0 |
+| heldout | all, sigma 6.8 m | 19 | 5 | 21037 | 83 | 37 | 18 | 0 | 0 | 0 | 0 | 99.6% | 1.12 (20574) | 0 |
+| tuning | all | 16 | 4 | 17518 | 18 | 17 | 1 | 0 | 0 | 0 | 0 | 100.0% | 0.24 (17330) | 0 |
+| tuning | poll | 16 | 4 | 977 | 25 | 25 | 9 | 0 | 0 | 0 | 0 | 98.1% | 1.45 (721) | 0 |
+| tuning | all, default config | 16 | 4 | 17518 | 88 | 47 | 31 | 0 | 0 | 0 | 0 | 99.4% | 0.24 (17003) | 0 |
+| tuning | all, sigma 6.8 m | 16 | 4 | 17518 | 113 | 38 | 22 | 0 | 0 | 0 | 0 | 99.3% | 1.84 (17016) | 0 |
 
 Per run (held-out, feed *all*):
 
@@ -200,7 +200,7 @@ Per run (held-out, feed *all*):
 | heldout_r013 | F06 | 174 | 211.4 | 2 | 1 | 0 | 98.8% | 78 | 9 / 4 / 92.4% |
 | heldout_r015 | F08 | 2345 | 125.0 | 1 | 1 | 0 | 100.0% | 300 | 5 / 3 / 99.7% |
 | heldout_r016 | F08 | 872 | 105.5 | 1 | 1 | 0 | 100.0% | 105 | 11 / 7 / 98.0% |
-| heldout_r017 | F09 | 2708 | 86.0 | 2 | 1 | 0 | 99.9% | 197 | 3 / 1 / 99.9% |
+| heldout_r017 | F09 | 2708 | 86.0 | 1 | 1 | 0 | 100.0% | 197 | 3 / 1 / 99.9% |
 | heldout_r020 | F11 | 1029 | 207.8 | 1 | 1 | 0 | 100.0% | 207 | 5 / 5 / 99.2% |
 | heldout_r021 | F12 | 1285 | 223.4 | 1 | 1 | 0 | 100.0% | 299 | 5 / 1 / 99.6% |
 | heldout_r022 | F12 | 1082 | 211.2 | 1 | 1 | 0 | 100.0% | 274 | 6 / 4 / 99.4% |
@@ -227,40 +227,39 @@ Per run (window x seed) position RMSE in metres over the scored instants (after 
 
 | portion | windows | path | runs scored | RMSE median / p95 / max | RMS | missed | ID sw. | false | NEES2 upd. | NIS radar |
 |---|---|---|---:|---|---:|---:|---:|---:|---:|---:|
-| heldout | all | real path | 174/174 | 15.2 / 36.6 / 61.1 | 19.4 | 0.0% | 12 | 6 | 2.30 | 2.13 |
-| heldout | all | control | 174/174 | 13.4 / 15.2 / 16.0 | 13.4 | 0.0% | 0 | 0 | 1.58 | 1.80 |
-| heldout | straight | real path | 138/138 | 15.0 / 40.6 / 61.1 | 19.2 | 0.0% | 8 | 6 | 2.24 | 2.12 |
-| heldout | straight | control | 138/138 | 13.4 / 15.2 / 16.0 | 13.4 | 0.0% | 0 | 0 | 1.57 | 1.80 |
-| heldout | manoeuvring | real path | 36/36 | 15.9 / 35.0 / 36.6 | 20.2 | 0.0% | 4 | 0 | 2.52 | 2.17 |
-| heldout | manoeuvring | control | 36/36 | 13.1 / 15.8 / 16.0 | 13.3 | 0.0% | 0 | 0 | 1.59 | 1.81 |
-| tuning | all | real path | 159/159 | 19.5 / 69.8 / 85.3 | 31.2 | 0.0% | 34 | 30 | 3.06 | 2.53 |
-| tuning | all | control | 159/159 | 13.8 / 16.1 / 18.5 | 13.8 | 0.0% | 0 | 0 | 1.64 | 1.83 |
-| tuning | straight | real path | 111/111 | 19.0 / 77.2 / 85.3 | 32.7 | 0.0% | 22 | 22 | 3.00 | 2.53 |
-| tuning | straight | control | 111/111 | 13.8 / 16.1 / 18.5 | 13.9 | 0.0% | 0 | 0 | 1.65 | 1.83 |
-| tuning | manoeuvring | real path | 48/48 | 20.4 / 50.8 / 69.8 | 27.3 | 0.0% | 12 | 8 | 3.19 | 2.53 |
-| tuning | manoeuvring | control | 48/48 | 13.5 / 15.9 / 16.0 | 13.5 | 0.0% | 0 | 0 | 1.62 | 1.80 |
+| heldout | all | real path | 174/174 | 13.8 / 21.7 / 25.9 | 15.2 | 0.0% | 0 | 1 | 2.08 | 2.02 |
+| heldout | all | control | 174/174 | 11.6 / 13.4 / 14.2 | 11.6 | 0.0% | 0 | 0 | 1.46 | 1.78 |
+| heldout | straight | real path | 138/138 | 13.6 / 21.7 / 25.9 | 15.1 | 0.0% | 0 | 1 | 2.05 | 2.03 |
+| heldout | straight | control | 138/138 | 11.7 / 13.5 / 14.2 | 11.7 | 0.0% | 0 | 0 | 1.46 | 1.77 |
+| heldout | manoeuvring | real path | 36/36 | 15.1 / 20.3 / 22.0 | 15.8 | 0.0% | 0 | 0 | 2.17 | 2.01 |
+| heldout | manoeuvring | control | 36/36 | 11.4 / 13.0 / 13.2 | 11.4 | 0.0% | 0 | 0 | 1.48 | 1.79 |
+| tuning | all | real path | 159/159 | 18.3 / 40.2 / 60.0 | 22.2 | 0.0% | 4 | 2 | 2.31 | 2.27 |
+| tuning | all | control | 159/159 | 11.8 / 14.1 / 16.9 | 12.0 | 0.0% | 0 | 1 | 1.52 | 1.80 |
+| tuning | straight | real path | 111/111 | 17.7 / 44.5 / 60.0 | 23.5 | 0.1% | 4 | 2 | 2.29 | 2.29 |
+| tuning | straight | control | 111/111 | 11.8 / 14.1 / 16.9 | 12.1 | 0.0% | 0 | 1 | 1.52 | 1.81 |
+| tuning | manoeuvring | real path | 48/48 | 18.8 / 23.2 / 26.0 | 19.0 | 0.0% | 0 | 0 | 2.36 | 2.21 |
+| tuning | manoeuvring | control | 48/48 | 11.5 / 13.4 / 15.0 | 11.7 | 0.0% | 0 | 0 | 1.49 | 1.77 |
 
 | portion | windows | pairs | RMS real / control m | share of MSE from real motion | excess RMS m | seed-to-seed SD m | window-to-window SD m |
 |---|---|---:|---|---:|---:|---:|---:|
-| heldout | all | 174 | 19.4 / 13.4 | 52% | 14.0 | 1.8 | 7.0 |
-| heldout | straight | 138 | 19.2 / 13.4 | 51% | 13.7 | 1.6 | 7.4 |
-| heldout | manoeuvring | 36 | 20.2 / 13.3 | 57% | 15.2 | 2.6 | 5.3 |
-| tuning | all | 159 | 31.2 / 13.8 | 81% | 28.0 | 3.8 | 15.6 |
-| tuning | straight | 111 | 32.7 / 13.9 | 82% | 29.6 | 4.2 | 17.2 |
-| tuning | manoeuvring | 48 | 27.3 / 13.5 | 76% | 23.7 | 2.9 | 10.9 |
+| heldout | all | 174 | 15.2 / 11.6 | 42% | 9.9 | 0.9 | 3.1 |
+| heldout | straight | 138 | 15.1 / 11.7 | 40% | 9.5 | 0.9 | 3.2 |
+| heldout | manoeuvring | 36 | 15.8 / 11.4 | 48% | 11.0 | 1.1 | 2.5 |
+| tuning | all | 159 | 22.2 / 12.0 | 71% | 18.7 | 1.8 | 8.4 |
+| tuning | straight | 111 | 23.5 / 12.1 | 73% | 20.2 | 2.1 | 9.8 |
+| tuning | manoeuvring | 48 | 19.0 / 11.7 | 62% | 15.0 | 0.9 | 2.8 |
 
 Seed-to-seed SD: spread of a window's RMSE over the 3 noise seeds (noise); window-to-window SD: spread of the seed-averaged RMSE between windows (mostly motion and geometry). Interpolation bound for these numbers: leave-one-out p95 27.4 m (held-out, linear).
 
 ## Findings
 
-- **ADS-B noise assumption.** NIS 0.13 against 2.00: not consistent, innovations 0.26x the size the filter predicts, so the filter believes its innovations are larger than they are. The innovation covers the measurement noise and the filter's prediction error; the leave-one-out scatter of the reports themselves (held-out median 6.1 m at ~2 s spacing) is far below the assumed 50 m 1-sigma. The assumed value is left as it is (results here are not used to change defaults); see the diagnostic below for what a measured value does.
-- **Prediction against dead reckoning.** The tracker's median error is above dead reckoning from the last report at horizons 0–2 s (7.1 m vs 7.0 m), 2–5 s (7.5 m vs 7.2 m), 5–10 s (10.4 m vs 9.1 m), 10–20 s (17.5 m vs 13.1 m), 20–40 s (35.0 m vs 25.8 m), 40–80 s (83.7 m vs 69.1 m). Dead reckoning uses the aircraft's own velocity report, which the tracker never receives (GeoPosition carries position only), and a constant-velocity filter cannot anticipate turns any better.
-- **Where the tracker helps.** Median error at or below dead reckoning at 80–160 s (88.7 m vs 168.9 m, n = 47). Few samples: horizons this long arise only where a real coverage gap lengthens a scheduled one.
-- **With the estimated sigma (6.8 m, diagnostic).** NIS 0.82, not consistent, innovations 0.64x the size the filter predicts; median tracker error 9.2 m at 2–5 s, 58.2 m at 20–40 s and 142.4 m at 40–80 s (assumed 50 m: 7.5, 35.0, 83.7 m); 31 fragmentations (assumed: 0). A measured noise level alone does not fix the tracker: it predicts worse and breaks more tracks, consistent with a constant-velocity filter (`accel_psd` 4) that then follows report noise more closely and, with a tighter gate, loses aircraft in turns. The 50 m value, though inconsistent, acts as smoothing the motion model needs; the mismatch is in the motion model as much as in the measurement noise.
-- **Default lifecycle on real ADS-B.** With `EngineConfig` defaults the same input gives 146 tracks started, 61 confirmed and 42 fragmentations (ADS-B settings: 21, 19, 0); coverage 99.1% vs 100.0%.
-- **Manoeuvres.** With simulated sensors, the median RMSE of manoeuvring windows is 15.9 m (p95 35.0 m) against 15.0 m for straight ones; the constant-velocity controls of the same windows give 13.1 m and 13.4 m.
-- **Real motion breaks simulated-radar tracks.** On real paths 12 ID switches and 6 false tracks over 174 held-out runs, against 0 and 0 on the constant-velocity controls with the same sensors and seeds.
-- **Large spread between flights.** The tuning windows give an RMS of 31.2 m against 19.4 m held out (controls 13.8 and 13.4 m): with 13 flights contributing windows, which flights land in a portion moves the result by more than the sensor noise does.
+- **ADS-B noise assumption.** NIS 0.11 against 2.00: not consistent, innovations 0.23x the size the filter predicts, so the filter believes its innovations are larger than they are. The innovation covers the measurement noise and the filter's prediction error; the leave-one-out scatter of the reports themselves (held-out median 6.1 m at ~2 s spacing) is far below the assumed 50 m 1-sigma. The assumed value is left as it is (results here are not used to change defaults); see the diagnostic below for what a measured value does.
+- **Prediction against dead reckoning.** The tracker's median error is above dead reckoning from the last report at horizons 0–2 s (8.4 m vs 7.0 m), 2–5 s (8.8 m vs 7.2 m), 5–10 s (11.7 m vs 9.1 m), 10–20 s (18.1 m vs 13.1 m), 20–40 s (36.1 m vs 25.8 m), 40–80 s (93.5 m vs 69.1 m), 80–160 s (377.4 m vs 168.9 m). Dead reckoning uses the aircraft's own velocity report, which the tracker never receives (GeoPosition carries position only): the tracker infers velocity from past positions, and none of its motion models anticipates a turn.
+- **With the estimated sigma (6.8 m, diagnostic).** NIS 1.12, not consistent, innovations 0.75x the size the filter predicts; median tracker error 7.9 m at 2–5 s, 47.6 m at 20–40 s and 119.1 m at 40–80 s (assumed 50 m: 8.8, 36.1, 93.5 m); 18 fragmentations (assumed: 0). A measured noise level alone does not fix the tracker: it predicts worse and breaks more tracks, consistent with an estimator that then follows report noise more closely and, with a tighter gate, loses aircraft in turns. The 50 m value, though inconsistent, acts as smoothing the motion model needs; the mismatch is in the motion model as much as in the measurement noise.
+- **Default lifecycle on real ADS-B.** With `EngineConfig` defaults the same input gives 146 tracks started, 61 confirmed and 42 fragmentations (ADS-B settings: 20, 19, 0); coverage 99.1% vs 100.0%.
+- **Manoeuvres.** With simulated sensors, the median RMSE of manoeuvring windows is 15.1 m (p95 20.3 m) against 13.6 m for straight ones; the constant-velocity controls of the same windows give 11.4 m and 11.7 m.
+- **Real motion breaks simulated-radar tracks.** On real paths 0 ID switches and 1 false tracks over 174 held-out runs, against 0 and 0 on the constant-velocity controls with the same sensors and seeds.
+- **Large spread between flights.** The tuning windows give an RMS of 22.2 m against 15.2 m held out (controls 12.0 and 11.6 m): with 13 flights contributing windows, which flights land in a portion moves the result by more than the sensor noise does.
 
 ## Limitations
 

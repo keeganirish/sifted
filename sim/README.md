@@ -4,7 +4,7 @@ Sensor simulators and scenario generators (Python, standard library only for now
 
 | Module | What it does |
 |---|---|
-| `wire` | Python mirror of the C++ wire codec, checked against `tests/fixtures/` |
+| `wire` | Python mirror of the C++ wire codec (encoder and strict decoder), checked against `tests/fixtures/` |
 | `trajectory` | closed-form ground truth: straight segments and coordinated turns |
 | `radar` | range-bearing radar with configurable pose, noise, rate and seed; multi-target scans with coverage, detection probability, clutter and dropouts |
 | `camera` | bearing-only sensor with pose, noise, rate, phase, field of view, detection probability and dropouts |
@@ -12,6 +12,7 @@ Sensor simulators and scenario generators (Python, standard library only for now
 | `scenarios` | named, reproducible scenarios: single-target `straight_crossing`, `turn`; multi-target `crossing_pair`, `close_pass`, `enter_leave`, `formation_split` (GNN vs greedy, M3), `demo` (docs/demo.md) |
 | `generate` | CLI that writes a scenario's `sensors.cfg`, `frames.hex`, `truth.csv` |
 | `manoeuvres` | writes Monte Carlo sets of the parametric `manoeuvre(load_g, speed, seed)` scenario (evaluation and tuning sets) and re-seeded copies of the fixtures, into the build directory, for `sifted_motion_eval` (ADR 0014) |
+| `montecarlo` | Monte Carlo sets for `sifted_montecarlo` (ADR 0015): independent noise realisations of every multi-target scenario and a clutter x Pd sweep, seeds derived by SplitMix64 from (base seed, scenario, run), into the build directory; `report` regenerates docs/evaluation-monte-carlo.md |
 | `send` | sends a scenario's frames to `sifted_fusiond` over UDP, real time or accelerated, optionally with injected sensor faults (`--fault`) |
 | `impair` | the degraded-network model (ADR 0008; exact mirror of `src/sifted/net/impairment.hpp`) and a live UDP impairment proxy |
 | `faults` | seeded sensor faults: dropout, intermittent, restart, clock offset/drift, bias, stuck (M3) |

@@ -55,8 +55,7 @@ def with_time(frame: bytes, time_ns: int) -> bytes:
 
 
 def decode(frame: bytes) -> wire.Measurement:
-    sid, kind, _reserved, seq, t, *rest = _PAYLOAD.unpack_from(frame, 8)
-    return wire.Measurement(sid, kind, seq, t, tuple(rest[:3]), tuple(rest[3:]))
+    return wire.decode(frame)
 
 
 def schedule(frames: list[bytes], speed: float, rebase_ns: int | None,

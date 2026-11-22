@@ -81,6 +81,7 @@ TEST(GateScreen, ImmBoundIsConservativeOnRandomPairs) {
   net::SplitMix64 rng(777);
   estimation::ImmParams params;
   std::size_t skipped = 0;
+  std::size_t enveloped = 0;
   std::size_t checked = 0;
   for (int i = 0; i < 20000; ++i) {
     estimation::StateVector x;
@@ -121,12 +122,17 @@ TEST(GateScreen, ImmBoundIsConservativeOnRandomPairs) {
     const auto gs = estimation::make_screen(*ctx);
     bool may = false;
     double min_mode = std::numeric_limits<double>::infinity();
+    double lambda_max = 0.0;
+    double spread = 0.0;
+    const Eigen::Vector2d center = f.state().head<2>();
     for (std::size_t c = 0; c < f.components(); ++c) {
       const estimation::StateCovariance& Pc = f.component_covariance(c);
       const double a = Pc(0, 0);
       const double b = Pc(0, 1);
       const double d = Pc(1, 1);
       const double lambda = 0.5 * (a + d) + std::sqrt(0.25 * (a - d) * (a - d) + b * b);
+      lambda_max = std::max(lambda_max, lambda);
+      spread = std::max(spread, (f.component_state(c).head<2>() - center).norm());
       may = may || estimation::may_gate(gs, f.component_state(c).head<2>(), lambda, limit);
       if (const auto lin = estimation::linearize(*ctx, f.component_state(c))) {
         auto single = estimation::ConstantVelocityFilter::create(f.component_state(c), Pc, 0.0);
@@ -146,8 +152,21 @@ TEST(GateScreen, ImmBoundIsConservativeOnRandomPairs) {
       ++skipped;
       ASSERT_TRUE(!g || g->d2 > limit) << "screened out a pair with d2 " << g->d2;
     }
+    // The engine's one-test envelope: never rejects what a per-mode test keeps.
+    const bool any = estimation::may_gate_envelope(
+        gs,
+        estimation::make_envelope(center, spread * (1.0 + 1e-12), lambda_max,
+                                  Eigen::Vector2d(pose.x_m, pose.y_m)),
+        limit);
+    if (may) {
+      ASSERT_TRUE(any) << "envelope rejected a pair a mode accepts";
+    }
+    if (!any) {
+      ++enveloped;
+    }
   }
   EXPECT_GT(skipped, 5000U);
+  EXPECT_GT(enveloped, skipped / 2);  // and it still prunes most of what they prune
   EXPECT_GT(checked, 15000U);
 }
 

@@ -701,6 +701,14 @@ std::string markdown(const Options& o, const Results& r) {
          "` (EngineConfig::motion_model; ADR 0014). The legacy constant-velocity filter "
          "against the IMM, including manoeuvres beyond these fixtures: "
          "[motion-model-evaluation.md](motion-model-evaluation.md).\n\n";
+  out +=
+      "This page is the fast regression scorecard: one sensor-noise realisation per scenario "
+      "(the seeds vary only the network), so a zero here can be the luck of one draw. The "
+      "statistical evaluation over hundreds of independent noise realisations, with intervals, "
+      "GOSPA and a clutter and detection sweep, is "
+      "[evaluation-monte-carlo.md](evaluation-monte-carlo.md); the comparison with an external "
+      "Stone Soup baseline on the same runs and scorer is "
+      "[evaluation-baseline.md](evaluation-baseline.md).\n\n";
 
   out += "Scenarios: ";
   for (std::size_t i = 0; i < r.scenarios.size(); ++i) {

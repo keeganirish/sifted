@@ -62,6 +62,7 @@ jobs:
           - { target: fuzz_sensor_table, corpus: corpus_sensors }
           - { target: fuzz_websocket, corpus: corpus_ws }
           - { target: fuzz_engine, corpus: corpus_engine }
+          - { target: fuzz_track_report, corpus: corpus_tracks }
     steps:
       - uses: actions/checkout@v5
       - name: Install dependencies

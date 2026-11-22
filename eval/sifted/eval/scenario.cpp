@@ -113,8 +113,13 @@ Scenario load_scenario_dir(const std::string& path) {
   return sc;
 }
 
-Scorer::Scorer(const std::vector<TruthRow>& truth, double match_distance_m)
-    : truth_(&truth), match_m_(match_distance_m) {
+Scorer::Scorer(const std::vector<TruthRow>& truth, double match_distance_m,
+               const GospaParams& gospa)
+    : gospa_(gospa), truth_(&truth), match_m_(match_distance_m) {
+  if (!is_valid(gospa)) {
+    throw std::invalid_argument("invalid GOSPA parameters");
+  }
+  s_.gospa_params = gospa;
   for (std::size_t r = 0; r < truth.size(); ++r) {
     if (times_.empty() || truth[r].time_ns != times_.back()) {
       times_.push_back(truth[r].time_ns);
@@ -123,19 +128,40 @@ Scorer::Scorer(const std::vector<TruthRow>& truth, double match_distance_m)
   }
 }
 
+namespace {
+bool is_reported(association::TrackStatus s) {
+  return s == association::TrackStatus::Confirmed || s == association::TrackStatus::Coasting;
+}
+}  // namespace
+
 void Scorer::score(std::size_t i, const Engine& engine) {
+  std::vector<TrackEstimate> reported;
+  for (TrackEstimate& e : engine.tracks_at(Timestamp{times_[i]})) {
+    if (is_reported(e.status)) {
+      reported.push_back(std::move(e));
+    }
+  }
+  score_reported(i, std::move(reported), &engine, true);
+}
+
+void Scorer::score(std::size_t i, std::vector<TrackEstimate> tracks, bool covariance) {
+  std::erase_if(tracks, [](const TrackEstimate& e) { return !is_reported(e.status); });
+  score_reported(i, std::move(tracks), nullptr, covariance);
+}
+
+void Scorer::score_reported(std::size_t i, std::vector<TrackEstimate> reported,
+                            const Engine* engine, bool covariance) {
   const std::int64_t t = times_[i];
+  if (engine == nullptr) {
+    s_.engine_metrics = false;
+  }
+  if (!covariance) {
+    s_.covariance = false;
+  }
   std::vector<TruthRow> now;
   for (std::size_t row = first_row_[i]; row < truth_->size() && (*truth_)[row].time_ns == t;
        ++row) {
     now.push_back((*truth_)[row]);
-  }
-  std::vector<TrackEstimate> reported;
-  for (TrackEstimate& e : engine.tracks_at(Timestamp{t})) {
-    if (e.status == association::TrackStatus::Confirmed ||
-        e.status == association::TrackStatus::Coasting) {
-      reported.push_back(std::move(e));
-    }
   }
 
   auto distance = [&](std::size_t a, std::size_t j) {
@@ -189,6 +215,7 @@ void Scorer::score(std::size_t i, const Engine& engine) {
   std::vector<char> matched_track(reported.size(), 0);
   std::vector<char> nis_scored(reported.size(), 0);  // matched to a target past burn-in
   std::vector<int> scored_target(reported.size(), 0);
+  std::vector<char> gospa_truth(now.size(), 0);  // in GOSPA's truth set at t
   for (std::size_t a = 0; a < now.size(); ++a) {
     const int tgt = now[a].target;
     rec.covered[tgt] = now[a].covered;
@@ -211,12 +238,21 @@ void Scorer::score(std::size_t i, const Engine& engine) {
     if (age >= kMissBurnInS) {
       ++s_.eligible;
       s_.missed += match[a] == association::kUnassigned ? 1U : 0U;
+      gospa_truth[a] = 1;
+    }
+    if (age >= kRmseBurnInS) {
+      ++s_.rmse_eligible[tgt];
     }
     if (match[a] != association::kUnassigned && age >= kRmseBurnInS) {
       const TrackEstimate& e = reported[static_cast<std::size_t>(match[a])];
       sq_[tgt] += std::pow(e.state(0) - now[a].x, 2) + std::pow(e.state(1) - now[a].y, 2);
       vel_sq_[tgt] += std::pow(e.state(2) - now[a].vx, 2) + std::pow(e.state(3) - now[a].vy, 2);
       ++s_.rmse_n[tgt];
+      nis_scored[static_cast<std::size_t>(match[a])] = 1;
+      scored_target[static_cast<std::size_t>(match[a])] = tgt;
+      if (!covariance) {
+        continue;
+      }
 
       // Consistency: same samples as the RMSE.
       const estimation::StateVector err =
@@ -233,15 +269,35 @@ void Scorer::score(std::size_t i, const Engine& engine) {
         st.position.add(pos, 2);
       }
       rec.nees[tgt] = full;
-      nis_scored[static_cast<std::size_t>(match[a])] = 1;
-      scored_target[static_cast<std::size_t>(match[a])] = tgt;
     }
   }
   // Tracks not matched at a scored target-instant still have their trace read,
   // so their earlier updates are not credited to a later match.
-  for (std::size_t j = 0; j < reported.size(); ++j) {
-    const bool scored = nis_scored[j] != 0;
-    collect_nis(engine, reported[j].id, scored, scored ? &rec.nis[scored_target[j]] : nullptr);
+  if (engine != nullptr) {
+    for (std::size_t j = 0; j < reported.size(); ++j) {
+      const bool scored = nis_scored[j] != 0;
+      collect_nis(*engine, reported[j].id, scored, scored ? &rec.nis[scored_target[j]] : nullptr);
+    }
+  }
+  // GOSPA (header comment): truth = targets eligible for "missed"; estimates
+  // = reported tracks not matched to a present target outside that set.
+  if (!times_.empty() && static_cast<double>(t - times_.front()) * 1e-9 >= kMissBurnInS) {
+    std::vector<char> dont_care(reported.size(), 0);
+    std::vector<Point2> xs;
+    for (std::size_t a = 0; a < now.size(); ++a) {
+      if (gospa_truth[a] != 0) {
+        xs.push_back({now[a].x, now[a].y});
+      } else if (match[a] != association::kUnassigned) {
+        dont_care[static_cast<std::size_t>(match[a])] = 1;
+      }
+    }
+    std::vector<Point2> ys;
+    for (std::size_t j = 0; j < reported.size(); ++j) {
+      if (dont_care[j] == 0) {
+        ys.push_back({reported[j].state(0), reported[j].state(1)});
+      }
+    }
+    s_.gospa.add(gospa(xs, ys, gospa_), gospa_.p);
   }
   for (std::size_t j = 0; j < reported.size(); ++j) {
     auto& c = track_counts_[reported[j].id];
@@ -313,6 +369,21 @@ std::size_t gate_dof(const Engine& engine, double gate) {
 }
 
 Score Scorer::finish(const Engine& engine) {
+  Score s = finish_common();
+  s.tracks_started = engine.tracks_started();
+  s.track_limit = engine.count(MeasurementOutcome::TrackLimit);
+  s.out_of_order = engine.count(MeasurementOutcome::OutOfOrder);
+  s.measurements = engine.measurements_processed();
+  return s;
+}
+
+Score Scorer::finish() {
+  Score s = finish_common();
+  s.engine_metrics = false;
+  return s;
+}
+
+Score Scorer::finish_common() const {
   Score s = s_;
   for (const auto& [tgt, sum] : sq_) {
     s.rmse[tgt] = std::sqrt(sum / static_cast<double>(s.rmse_n[tgt]));
@@ -329,17 +400,14 @@ Score Scorer::finish(const Engine& engine) {
     }
   }
   s.reported_tracks = track_counts_.size();
-  s.tracks_started = engine.tracks_started();
-  s.track_limit = engine.count(MeasurementOutcome::TrackLimit);
-  s.out_of_order = engine.count(MeasurementOutcome::OutOfOrder);
-  s.measurements = engine.measurements_processed();
   return s;
 }
 
 Score run_engine(const Scenario& sc, const std::vector<Measurement>& measurements,
-                 const EngineConfig& cfg, double match_distance_m) {
+                 const EngineConfig& cfg, double match_distance_m, const GospaParams& gospa,
+                 const InstantObserver& on_instant) {
   Engine engine(sc.sensors, cfg);
-  Scorer scorer(sc.truth, match_distance_m);
+  Scorer scorer(sc.truth, match_distance_m, gospa);
   std::vector<MeasurementResult> results;
   std::size_t next = 0;
   for (std::size_t i = 0; i < scorer.instants().size(); ++i) {
@@ -351,6 +419,9 @@ Score run_engine(const Scenario& sc, const std::vector<Measurement>& measurement
     engine.on_scan(std::span<const Measurement>(measurements).subspan(next, end - next), results);
     next = end;
     scorer.score(i, engine);
+    if (on_instant) {
+      on_instant(t, engine);
+    }
   }
   Score s = scorer.finish(engine);
   for (std::size_t i = 0; i < results.size() && i < measurements.size(); ++i) {
@@ -386,7 +457,7 @@ std::vector<net::ArrivingFrame> clean_arrivals(const std::vector<net::SentFrame>
 
 PipelineRun run_pipeline(const Scenario& sc, const std::vector<net::ArrivingFrame>& arrivals,
                          const net::PipelineConfig& cfg, std::int64_t tick_ns,
-                         double match_distance_m) {
+                         double match_distance_m, const GospaParams& gospa) {
   PipelineRun run;
   std::size_t bearings = 0;
   std::size_t bearings_associated = 0;
@@ -407,7 +478,7 @@ PipelineRun run_pipeline(const Scenario& sc, const std::vector<net::ArrivingFram
       }
     }
   });
-  Scorer scorer(sc.truth, match_distance_m);
+  Scorer scorer(sc.truth, match_distance_m, gospa);
   std::optional<Timestamp> last;  // time of the last event consumed
   std::size_t next = 0;
   // Consume every event (frame or quiet tick) at or before `until`.

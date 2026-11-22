@@ -92,9 +92,10 @@ std::optional<double> mahalanobis2(const ConstantVelocityFilter& f,
 // d2_mix >= min_j d_j^2 (and the implementation clamps it to that bound, so
 // rounding cannot break it). Hence d2_mix <= limit implies d_j^2 <= limit for
 // some j, which by the argument above implies may_gate(p_j, lambda_j). The
-// engine therefore skips a pair only if may_gate is false for every
-// component: provably conservative for the mixture, and for one component
-// exactly the single-filter screen.
+// engine therefore may skip a pair only if may_gate is false for every
+// component, which it tests with one envelope (may_gate_envelope, below):
+// provably conservative for the mixture. A single-component track still uses
+// may_gate itself, exactly the single-filter screen.
 struct GateScreen {
   enum class Kind : std::uint8_t { None, RangeBearing, Position };
   Kind kind = Kind::None;
@@ -109,6 +110,33 @@ GateScreen make_screen(const MeasurementContext& c) noexcept;
 // 2x2 position covariance. True: compute the pair.
 bool may_gate(const GateScreen& s, const Eigen::Vector2d& position, double lambda,
               double limit) noexcept;
+
+// One test for every component of a mixture at once (ADR 0014). An envelope
+// covers every component whose position lies within `spread` of `center` and
+// whose largest position variance is at most `lambda`; it is built once per
+// track and group, from the group's sensor position. may_gate_envelope is
+// false only if may_gate is false for every such component. Proof: such a
+// component's plane distance to the measured point is at least
+// D_center - spread; its range from the sensor lies in
+// [r_center - spread, r_center + spread]; may_gate's bound B grows with lambda
+// and is convex in that range, so it is largest at an end of the interval.
+// The final comparison avoids a square root by testing
+// D_center^2 > 2 B + 2 spread^2, which implies D_center - spread > sqrt(B).
+// The engine uses it for IMM tracks (center: combined position; spread:
+// largest distance of a mode from it; lambda: largest mode variance), so the
+// screen costs one cheap test per pair whatever the number of modes.
+struct GateEnvelope {
+  Eigen::Vector2d center = Eigen::Vector2d::Zero();
+  Eigen::Vector2d sensor = Eigen::Vector2d::Zero();
+  double spread = 0.0;
+  double lambda = 0.0;
+  double r_lo = 0.0;  // range interval of the components from `sensor`
+  double r_hi = 0.0;
+  bool valid = false;  // false: never screen
+};
+GateEnvelope make_envelope(const Eigen::Vector2d& center, double spread, double lambda,
+                           const Eigen::Vector2d& sensor) noexcept;
+bool may_gate_envelope(const GateScreen& s, const GateEnvelope& e, double limit) noexcept;
 
 // Applies the linearised measurement to `f` (shared Joseph-form update).
 FilterStatus apply(ConstantVelocityFilter& f, const AnyLinearized& l) noexcept;

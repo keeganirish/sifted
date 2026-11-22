@@ -1,0 +1,24 @@
+# Stone Soup baseline (benchmarks/baselines/stonesoup/README.md). Every
+# package pinned exactly, transitive dependencies included, as resolved for
+# CPython 3.12 on Linux x86-64 when the baseline was written. Developer tooling
+# only: nothing in the application, installer, default tests or CI uses it.
+stonesoup==1.9.1
+contourpy==1.4.0
+cycler==0.12.1
+fonttools==4.68.0
+kiwisolver==1.5.1
+matplotlib==3.11.2
+narwhals==2.29.0
+numpy==2.5.5
+ordered-set==4.1.0
+packaging==26.3
+pillow==13.0.0
+plotly==7.1.0
+pymap3d==3.2.0
+pyparsing==3.3.3
+python-dateutil==4.0.0
+rtree==1.4.1
+ruamel.yaml==0.19.1
+scipy==1.18.1
+tzdata==2026.6
+utm==0.9.0

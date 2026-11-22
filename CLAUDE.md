@@ -25,7 +25,7 @@ Formatting is enforced in CI with clang-format 18 over `src tests fuzz benchmark
 find src tests fuzz benchmarks eval -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run -Werror
 ```
 
-Fuzzing (six targets, corpora in `fuzz/corpus*`; CI pairs each target with its corpus, see `.github/workflows/ci.yml`):
+Fuzzing (seven targets, corpora in `fuzz/corpus*`; CI pairs each target with its corpus, see `.github/workflows/ci.yml`):
 ```bash
 cmake --preset fuzz && cmake --build --preset fuzz
 build/fuzz/fuzz/fuzz_engine build/fuzz-work/engine fuzz/corpus_engine -max_total_time=60
@@ -70,4 +70,4 @@ Every parser of external input (wire frames, event log + header, sensor table, W
 - `sim/`: standard-library Python; no third-party dependencies.
 - `install.sh` must stay idempotent (CI runs it twice on Ubuntu and macOS). Shell scripts need LF endings.
 
-Design decisions are recorded in `docs/adr/0001`–`0013`; consult the relevant ADR before changing wire format, sensor table, association/lifecycle, event log, networking, tangent-plane origin, impairment model, out-of-order policy, fault handling, benchmark method or the real-data evaluation.
+Design decisions are recorded in `docs/adr/0001`–`0015`; consult the relevant ADR before changing wire format, sensor table, association/lifecycle, event log, networking, tangent-plane origin, impairment model, out-of-order policy, fault handling, benchmark method, the real-data evaluation, the motion model or the Monte Carlo evaluation and baseline.

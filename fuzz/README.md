@@ -11,6 +11,7 @@ structure-aware one. Each file's header lists the properties it checks.
 | `fuzz_log_header` | event log header text (B4), without the CRC that hides it from `fuzz_event_log` | `corpus_header/` |
 | `fuzz_sensor_table` | sensor table text (B5): parse, canonical round trip | `corpus_sensors/` |
 | `fuzz_websocket` | WebSocket handshake and client frame stream (B3) | `corpus_ws/` |
+| `fuzz_track_report` | track reports (B7, tracker output read by the evaluation): parse, canonical round trip, scoring against a fixed truth never fails other than with `TrackReportError` and gives a finite GOSPA | `corpus_tracks/` |
 | `fuzz_engine` | structure-aware measurement sequences into two engines and two pipelines: one outcome per measurement, track cap, every bounded buffer bounded, finite state, determinism (the second engine runs without the gate screen) | `corpus_engine/` |
 
 ```bash

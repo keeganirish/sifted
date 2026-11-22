@@ -886,7 +886,9 @@ def render(manifest: dict, datasets: list[Dataset], flights: list[FlightInfo], r
         "range the flat-plane distortion of a straight constant-speed path is below 0.1% of its "
         "speed, far under the measurement noise. Engine configuration: the launcher's ADS-B "
         f"settings (`{' '.join(ADSB_TRACKER_ARGS)}`; `app/launcher.py` `ADSB_TRACKER_ARGS`), "
-        f"assumed sigma {SIGMA_M:.0f} m (`sifted_sim.adsb`). Feeds:\n")
+        f"assumed sigma {SIGMA_M:.0f} m (`sifted_sim.adsb`). The estimator is the "
+        "`EngineConfig` default, the IMM (ADR 0014); evaluation B's `sifted_eval` runs use the "
+        "same default. Feeds:\n")
     add("- *all*: every cleaned report, at its millisecond position time (`lastposupdate`), "
         "nothing withheld. Continuity and NIS come from this feed.")
     add(f"- *withheld*: the same, minus the withheld reports: after {A_BURN_IN_S:.0f} s, gaps of "
@@ -1132,8 +1134,9 @@ def findings(a: dict, b: dict, loo_held: dict, method: str) -> str:
                        "above dead reckoning from the last report at horizons "
                        + ", ".join(f"{lo}–{hi} s ({t:.1f} m vs {d:.1f} m)" for lo, hi, t, d, _ in worse)
                        + ". Dead reckoning uses the aircraft's own velocity report, which the "
-                       "tracker never receives (GeoPosition carries position only), and a "
-                       "constant-velocity filter cannot anticipate turns any better.")
+                       "tracker never receives (GeoPosition carries position only): the "
+                       "tracker infers velocity from past positions, and none of its motion "
+                       "models anticipates a turn.")
         better = [r for r in rows if r[2] <= r[3]]
         if better:
             out.append("- **Where the tracker helps.** Median error at or below dead reckoning at "
@@ -1153,9 +1156,9 @@ def findings(a: dict, b: dict, loo_held: dict, method: str) -> str:
         worse = sum(1 for lo, hi in (("2", "5"), ("20", "40"), ("40", "80"))
                     if (med(hws, lo, hi) or 0) > (med(held, lo, hi) or 0))
         verdict = ("A measured noise level alone does not fix the tracker: it predicts worse and "
-                   "breaks more tracks, consistent with a constant-velocity filter "
-                   "(`accel_psd` 4) that then follows report noise more closely and, with a "
-                   "tighter gate, loses aircraft in turns. The 50 m value, though inconsistent, "
+                   "breaks more tracks, consistent with an estimator that then follows report "
+                   "noise more closely and, with a tighter gate, loses aircraft in turns. The "
+                   "50 m value, though inconsistent, "
                    "acts as smoothing the motion model needs; the mismatch is in the motion "
                    "model as much as in the measurement noise."
                    if worse >= 2 and hs["fragments"] > hall["fragments"] else

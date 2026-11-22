@@ -182,6 +182,16 @@ the default GNN only). Across other noise seeds greedy broke identity in all
 and GNN in some (the geometry is genuinely ambiguous), see
 `tests/multi_target_regression_test.cpp`.
 
+These fixture numbers are one noise realisation each. The statistical picture
+is [evaluation-monte-carlo.md](evaluation-monte-carlo.md) (ADR 0015): 100
+independent realisations per scenario and a clutter × Pd sweep, with bootstrap
+intervals, the fraction of runs with any identity break, and GOSPA (alpha = 2,
+c = 100 m, p = 2; `eval/sifted/eval/gospa.hpp`) beside the CLEAR-MOT metrics.
+[evaluation-baseline.md](evaluation-baseline.md) compares Sifted with a
+Stone Soup tracker on the same runs and scorer. The scorer accepts any
+tracker's output as a track report (`eval/sifted/eval/track_report.hpp`); NIS
+and the engine counters are then marked unavailable.
+
 ### Filter consistency
 
 Does the covariance mean what the map's 1-sigma circle claims?
@@ -378,6 +388,11 @@ ratios the tests print.
 | severe | 1.00 | 0.0 | 0.96 | 15.54 | 32.06 | 1 (2) | 0 |
 | severe | 2.00 | 0.0 | 1.80 | 18.62 | 40.15 | 1 (2) | 0 |
 
+The table was measured with the legacy constant-velocity filter. The same
+command under the IMM (ADR 0014) gives, at the severe level, 29.0% → 0.1% out
+of order, missed 6.79% → 0.53% and 7 → 1 ID switches without and with the
+0.5 s window, at +0.27 m mean RMSE on a clean network. The decision stands.
+
 Decision: a bounded reorder stage, 0.5 s in the daemon. It recovers
 essentially all the data the M2 drop policy loses (29% -> 0.1% at severe)
 for +0.35 m mean RMSE and +0.4 s of end-to-end latency on a clean network
@@ -435,7 +450,8 @@ and says "partial".
 ## 10. Performance
 
 Full report: [`benchmarks.md`](benchmarks.md). Summary (sandbox VM, 2 vCPU
-Xeon, GCC 13 `-O3`, 5 runs per configuration):
+Xeon, GCC 13 `-O3`, 5 runs per configuration, the legacy constant-velocity
+filter; the IMM's relative cost follows the list):
 
 - per-scan engine time at 1 000 targets + 10% clutter: median 10.0 ms, p99
   10.5 ms (before the gate screen: median 145 ms);
@@ -447,6 +463,16 @@ Xeon, GCC 13 `-O3`, 5 runs per configuration):
   loopback): median 101 ms at 100 targets and 115 ms at 1 000 with the
   reorder window off -- the 100 ms is the quiet tick that ends a scan -- and
   502 / 519 ms with the default 0.5 s window.
+
+**IMM (ADR 0014), measured against the legacy filter on one machine** (a
+laptop, not the sandbox; benchmarks.md, "Motion models"): 2 898 against
+2 976 tracks per core (97%). Per-scan time is +5% to +27% at 1 000-3 000
+targets, where the all-pairs screen dominates. Small pictures and the
+300-target throughput run, where estimation dominates, cost 1.6-2.7x
+(213 000 against 327 000 measurements/s). The IMM's screen is one envelope
+test per pair covering every mode (`estimation::may_gate_envelope`), and
+each track is predicted once per group. Before both changes the IMM reached
+1 532 tracks per core.
 
 Profile (callgrind): before M3, > 70% of engine time at 1 000 targets was the
 all-pairs gating computation. The **gate screen** (`estimation::may_gate`)
@@ -462,7 +488,14 @@ components (the mode-matched predictions), and its statistic is
 `d²_mix ≥ min_j d_j²`. This is clamped in the implementation, so rounding
 cannot break it. Hence `d²_mix ≤ G` implies `d_j² ≤ G` for some mode, which
 by the bound above implies the screen passes for that mode's position and λ.
-The engine skips a pair only when the screen fails for every mode. It is exact in effect: every regression,
+A pair may therefore be skipped only when the screen fails for every mode.
+The engine tests all modes at once with an envelope (`may_gate_envelope`):
+centre `c` (the combined position), spread `ρ` (largest distance of a mode
+from it) and the largest mode variance. Every mode's distance is at least
+`D_c - ρ`, its range lies in `[r_c - ρ, r_c + ρ]`, and the bound grows with λ
+and is convex in `r`, so it is largest at an end of that interval. The pair is
+skipped if `D_c² > 2B + 2ρ²`, which implies `D_c - ρ > √B` and so that every
+mode fails. It is exact in effect: every regression,
 degraded, fault and replay test is unchanged, `GateScreen.*` compares full
 traces with the screen on and off, and `fuzz_engine` does the same on
 arbitrary input. The remaining cost is the all-pairs screen itself

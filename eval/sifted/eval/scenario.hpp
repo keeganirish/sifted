@@ -38,6 +38,23 @@
 // parameter (Scorer, run_engine, run_pipeline; sifted_eval --match-distance):
 // another sensor geometry, such as the real-data evaluation's longer-range
 // radar (docs/real-data-evaluation.md), sizes it by the same rule.
+//
+// GOSPA (gospa.hpp; added alongside the CLEAR-MOT metrics, which it leaves
+// unchanged) at every truth instant at least kMissBurnInS after the first:
+//   * truth set: the targets that count for "missed" at that instant
+//     (covered, at least kMissBurnInS after first entering coverage);
+//   * estimate set: the reported tracks, minus those the CLEAR-MOT matcher
+//     matched to a target that is present but not in the truth set (out of
+//     coverage, or still in its burn-in). Such a track is a correct track of
+//     a target the evaluation does not score yet, so it is neither credited
+//     nor counted as false ("don't care").
+//
+// Tracker-independent scoring: Scorer::score takes the reported tracks either
+// from a live Engine or as a list (an external tracker's output, read from a
+// track report file, track_report.hpp). Metrics that need engine internals
+// (NIS, the engine's counters) are then unavailable: Score::engine_metrics is
+// false and they must be reported as such, never as zero. Without
+// covariances, NEES is unavailable likewise (Score::covariance).
 
 #include <cstddef>
 #include <cstdint>
@@ -49,6 +66,7 @@
 #include "sifted/core/engine.hpp"
 #include "sifted/core/sensor.hpp"
 #include "sifted/eval/consistency.hpp"
+#include "sifted/eval/gospa.hpp"
 #include "sifted/net/impairment.hpp"
 #include "sifted/net/pipeline_config.hpp"
 
@@ -146,6 +164,18 @@ struct Score {
   // Associated updates that rolled out of a track's trace window before they
   // could be read (0 unless TraceConfig::events_per_track is too small).
   std::size_t nis_lost = 0;
+  // Per target: covered target-instants past kRmseBurnInS, matched or not.
+  // A target with rmse_eligible > 0 and no rmse entry was never tracked when
+  // it should have been: its RMSE is undefined, not zero.
+  std::map<int, std::size_t> rmse_eligible;
+  GospaParams gospa_params;
+  GospaSum gospa;  // over the scored instants (see the header comment)
+  // False when scored from a track list without an engine: NIS, nis_lost,
+  // tracks_started, track_limit, out_of_order and measurements are then
+  // unavailable (left at 0, but not to be reported as 0).
+  bool engine_metrics = true;
+  // False when the tracks carried no covariance: NEES is unavailable.
+  bool covariance = true;
 
   double missed_ratio() const {
     return eligible ? static_cast<double>(missed) / static_cast<double>(eligible) : 0.0;
@@ -155,15 +185,27 @@ struct Score {
 // Accumulates a Score over the truth instants of a scenario.
 class Scorer {
  public:
-  explicit Scorer(const std::vector<TruthRow>& truth, double match_distance_m = kMatchDistanceM);
+  // Throws std::invalid_argument if !is_valid(gospa).
+  explicit Scorer(const std::vector<TruthRow>& truth, double match_distance_m = kMatchDistanceM,
+                  const GospaParams& gospa = {});
   // Truth instants, ascending.
   const std::vector<std::int64_t>& instants() const noexcept { return times_; }
   // Scores instant `i` (in order) from the engine's tracks extrapolated to it.
   void score(std::size_t i, const Engine& engine);
+  // Scores instant `i` (in order) from an external tracker's tracks at that
+  // instant (any status; only Confirmed and Coasting count as reported),
+  // sorted by id. `covariance`: whether their covariances are meaningful.
+  void score(std::size_t i, std::vector<TrackEstimate> tracks, bool covariance);
   // Final numbers; `engine` supplies the counters.
   Score finish(const Engine& engine);
+  // Final numbers without an engine (Score::engine_metrics false).
+  Score finish();
 
  private:
+  void score_reported(std::size_t i, std::vector<TrackEstimate> reported, const Engine* engine,
+                      bool covariance);
+  Score finish_common() const;
+  GospaParams gospa_;
   const std::vector<TruthRow>* truth_;
   double match_m_;
   std::vector<std::int64_t> times_;
@@ -186,9 +228,13 @@ class Scorer {
 Score run_engine(const Scenario& sc, const EngineConfig& cfg = {},
                  double match_distance_m = kMatchDistanceM);
 
-// Same, with the measurement list replaced (fault injection).
+// Same, with the measurement list replaced (fault injection). `on_instant`,
+// if set, is called at every truth instant after it is scored, with the
+// instant and the engine (to export Sifted's tracks, track_report.hpp).
+using InstantObserver = std::function<void(std::int64_t, const Engine&)>;
 Score run_engine(const Scenario& sc, const std::vector<Measurement>& measurements,
-                 const EngineConfig& cfg = {}, double match_distance_m = kMatchDistanceM);
+                 const EngineConfig& cfg = {}, double match_distance_m = kMatchDistanceM,
+                 const GospaParams& gospa = {}, const InstantObserver& on_instant = {});
 
 // Feeds a sequence of arrivals through a net::Pipeline the way the live
 // daemon does: frames in arrival order with recv = arrival time, plus a tick
@@ -208,7 +254,7 @@ struct PipelineRun {
 inline constexpr std::int64_t kDaemonTickNs = 100'000'000;
 PipelineRun run_pipeline(const Scenario& sc, const std::vector<net::ArrivingFrame>& arrivals,
                          const net::PipelineConfig& cfg, std::int64_t tick_ns = kDaemonTickNs,
-                         double match_distance_m = kMatchDistanceM);
+                         double match_distance_m = kMatchDistanceM, const GospaParams& gospa = {});
 
 // Every frame of the scenario, sent at its measurement time.
 std::vector<net::SentFrame> sent_frames(const std::vector<Measurement>& measurements);

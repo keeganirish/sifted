@@ -1,0 +1,5 @@
+sifted-tracks 1
+time_ns,track_id,status,last_update_ns,x_m,y_m,vx_mps,vy_mps,p00,p01,p02,p03,p11,p12,p13,p22,p23,p33
+3000000000,4,confirmed,3000000000,301,-2,100,0,,,,,,,,,,
+4000000000,4,coasting,3000000000,401,-2,100,0,,,,,,,,,,
+5000000000,9,confirmed,4500000000,2.5,51,0.1,-0.1,,,,,,,,,,

@@ -11,6 +11,10 @@ build/release/eval/sifted_eval --out docs/evaluation.md
 
 The tool, the regression tests and the degraded-network and fault tests share one implementation of loading, scoring and the conditions (`eval/sifted/eval/`); a test (`Eval.*` in `tests/eval_test.cpp`) checks that the tool's direct-feed numbers equal the regression baselines. Accuracy does not depend on CPU speed, load or timing: the inputs are recorded fixtures, time is an input, the impairment model is seeded, and the engine is a deterministic function of its ordered input (docs/design.md section 3). Running the command twice gives a byte-identical file, and any machine with the same compiler and maths library gives the same numbers.
 
+Estimator: `imm` (EngineConfig::motion_model; ADR 0014). The legacy constant-velocity filter against the IMM, including manoeuvres beyond these fixtures: [motion-model-evaluation.md](motion-model-evaluation.md).
+
+This page is the fast regression scorecard: one sensor-noise realisation per scenario (the seeds vary only the network), so a zero here can be the luck of one draw. The statistical evaluation over hundreds of independent noise realisations, with intervals, GOSPA and a clutter and detection sweep, is [evaluation-monte-carlo.md](evaluation-monte-carlo.md); the comparison with an external Stone Soup baseline on the same runs and scorer is [evaluation-baseline.md](evaluation-baseline.md).
+
 Scenarios: `close_pass`, `crossing_pair`, `demo`, `enter_leave`, `formation_split`, `straight_crossing`, `turn`. Seeds: 7, 8, 9. Reorder windows: 0.50 s (the daemon uses 0.50 s).
 
 ## Summary over all scenarios
@@ -19,17 +23,17 @@ Each row merges every scenario and seed of one condition (runs = scenarios x see
 
 | condition | window s | runs | mean RMSE m | worst RMSE m | missed % | ID sw. | false | out-of-order % | recovery mean / worst s |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| direct | – | 7 | 9.87 | 12.20 | 0.00 | 0 | 0 | 0.00 | – |
-| direct without bearing-only | – | 5 | 14.84 | 35.62 | 0.08 | 2 | 0 | 0.00 | – |
-| clean | 0.50 | 7 | 12.42 | 19.18 | 0.00 | 0 | 0 | 0.00 | – |
-| clean + range-bearing dropout 6 s | 0.50 | 7 | 13.55 | 20.71 | 0.57 | 1 | 0 | 0.00 | 1.3 / 3.0 |
-| clean + bearing-only intermittent | 0.50 | 5 | 15.21 | 36.46 | 0.08 | 2 | 0 | 0.00 | – |
-| mild | 0.50 | 21 | 13.14 | 35.81 | 0.02 | 2 | 0 | 0.00 | – |
-| mild + 5 s outage | 0.50 | 21 | 13.86 | 35.59 | 0.48 | 5 | 0 | 0.00 | 1.3 / 3.0 |
-| mild + 8 s outage | 0.50 | 21 | 15.29 | 36.26 | 1.07 | 9 | 0 | 0.00 | 1.7 / 5.0 |
-| mild + 15 s outage | 0.50 | 21 | 17.60 | 35.71 | 5.12 | 54 | 0 | 0.00 | 3.6 / 4.0 |
-| moderate | 0.50 | 21 | 14.36 | 36.20 | 0.20 | 5 | 0 | 0.00 | – |
-| severe | 0.50 | 21 | 15.57 | 29.37 | 0.89 | 3 | 0 | 0.06 | – |
+| direct | – | 7 | 8.55 | 10.98 | 0.00 | 0 | 0 | 0.00 | – |
+| direct without bearing-only | – | 5 | 13.18 | 34.27 | 0.00 | 2 | 0 | 0.00 | – |
+| clean | 0.50 | 7 | 10.55 | 16.53 | 0.00 | 0 | 0 | 0.00 | – |
+| clean + range-bearing dropout 6 s | 0.50 | 7 | 11.40 | 20.25 | 0.57 | 1 | 0 | 0.00 | 1.3 / 3.0 |
+| clean + bearing-only intermittent | 0.50 | 5 | 13.18 | 35.63 | 0.00 | 2 | 0 | 0.00 | – |
+| mild | 0.50 | 21 | 10.60 | 16.63 | 0.00 | 0 | 0 | 0.00 | – |
+| mild + 5 s outage | 0.50 | 21 | 11.16 | 20.17 | 0.47 | 3 | 0 | 0.00 | 1.3 / 3.0 |
+| mild + 8 s outage | 0.50 | 21 | 12.32 | 20.06 | 1.05 | 7 | 0 | 0.00 | 1.7 / 5.0 |
+| mild + 15 s outage | 0.50 | 21 | 13.84 | 19.79 | 5.12 | 54 | 0 | 0.00 | 3.6 / 4.0 |
+| moderate | 0.50 | 21 | 11.69 | 35.48 | 0.14 | 3 | 0 | 0.00 | – |
+| severe | 0.50 | 21 | 15.04 | 55.25 | 1.22 | 9 | 0 | 0.06 | – |
 
 ## Direct engine feed (regression reference)
 
@@ -37,13 +41,13 @@ The frames fed straight into the engine scan by scan, as the regression tests do
 
 | scenario | per-target RMSE m | mean RMSE m | missed | ID sw. | false | mean RMSE without bearing-only m |
 |---|---|---:|---:|---:|---:|---:|
-| close_pass | 1:10.49 2:7.64 3:12.20 | 10.11 | 0/258 | 0 | 0 | 13.33 |
-| crossing_pair | 1:8.39 2:8.63 | 8.51 | 0/172 | 0 | 0 | 11.18 |
-| demo | 1:8.31 2:9.08 3:8.54 4:9.57 5:7.63 | 8.62 | 0/630 | 0 | 0 | 10.81 |
-| enter_leave | 1:7.78 2:9.98 3:9.62 4:8.24 | 8.91 | 0/302 | 0 | 0 | 11.10 |
-| formation_split | 1:11.54 2:11.58 3:10.42 | 11.18 | 0/258 | 0 | 0 | 27.78 |
-| straight_crossing | 1:11.13 | 11.13 | 0/86 | 0 | 0 | – |
-| turn | 1:10.61 | 10.61 | 0/86 | 0 | 0 | – |
+| close_pass | 1:8.60 2:5.94 3:10.27 | 8.27 | 0/258 | 0 | 0 | 11.44 |
+| crossing_pair | 1:7.09 2:7.09 | 7.09 | 0/172 | 0 | 0 | 9.16 |
+| demo | 1:7.12 2:7.93 3:7.28 4:7.87 5:6.27 | 7.29 | 0/630 | 0 | 0 | 9.09 |
+| enter_leave | 1:6.68 2:7.85 3:7.65 4:7.01 | 7.30 | 0/302 | 0 | 0 | 9.76 |
+| formation_split | 1:10.50 2:10.98 3:9.76 | 10.41 | 0/258 | 0 | 0 | 26.45 |
+| straight_crossing | 1:9.35 | 9.35 | 0/86 | 0 | 0 | – |
+| turn | 1:10.13 | 10.13 | 0/86 | 0 | 0 | – |
 
 ## Per scenario and condition
 
@@ -51,79 +55,79 @@ Targets: scored / present in truth (fewest over the seeds). Missed: target-insta
 
 | scenario | condition | window s | runs | targets | mean RMSE m | worst RMSE m | missed | ID sw. | false | measurements | out-of-order | duplicates | late | recovery mean / worst s | survived |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| close_pass | direct | – | 1 | 3/3 | 10.11 | 12.20 | 0/258 | 0 | 0 | 700 | 0 | – | – | – | – |
-| close_pass | direct without bearing-only | – | 1 | 3/3 | 13.33 | 14.60 | 0/258 | 0 | 0 | 275 | 0 | – | – | – | – |
-| close_pass | clean | 0.50 | 1 | 3/3 | 13.61 | 19.18 | 0/258 | 0 | 0 | 700 | 0 | 0 | 0 | – | – |
-| close_pass | clean + range-bearing dropout 6 s | 0.50 | 1 | 3/3 | 15.10 | 20.71 | 6/258 | 1 | 0 | 683 | 0 | 0 | 0 | 3.0 / 3.0 | 2/3 |
-| close_pass | clean + bearing-only intermittent | 0.50 | 1 | 3/3 | 14.67 | 19.32 | 0/258 | 0 | 0 | 527 | 0 | 0 | 0 | – | – |
-| close_pass | mild | 0.50 | 3 | 3/3 | 13.61 | 19.36 | 0/774 | 0 | 0 | 2079 | 0 | 23 | 0 | – | – |
-| close_pass | mild + 5 s outage | 0.50 | 3 | 3/3 | 14.83 | 20.95 | 15/774 | 3 | 0 | 1980 | 0 | 23 | 0 | 3.0 / 3.0 | 6/9 |
-| close_pass | mild + 8 s outage | 0.50 | 3 | 3/3 | 15.66 | 20.60 | 24/774 | 3 | 0 | 1919 | 0 | 23 | 0 | 3.0 / 3.0 | 6/9 |
-| close_pass | mild + 15 s outage | 0.50 | 3 | 3/3 | 19.53 | 21.05 | 60/774 | 9 | 0 | 1759 | 0 | 20 | 0 | 4.0 / 4.0 | 0/9 |
-| close_pass | moderate | 0.50 | 3 | 3/3 | 14.19 | 20.81 | 0/774 | 0 | 0 | 1985 | 0 | 38 | 0 | – | – |
-| close_pass | severe | 0.50 | 3 | 3/3 | 17.09 | 29.37 | 2/774 | 0 | 0 | 1732 | 4 | 84 | 4 | – | – |
-| crossing_pair | direct | – | 1 | 2/2 | 8.51 | 8.63 | 0/172 | 0 | 0 | 563 | 0 | – | – | – | – |
-| crossing_pair | direct without bearing-only | – | 1 | 2/2 | 11.18 | 11.56 | 0/172 | 0 | 0 | 225 | 0 | – | – | – | – |
-| crossing_pair | clean | 0.50 | 1 | 2/2 | 10.26 | 10.37 | 0/172 | 0 | 0 | 563 | 0 | 0 | 0 | – | – |
-| crossing_pair | clean + range-bearing dropout 6 s | 0.50 | 1 | 2/2 | 10.50 | 10.62 | 0/172 | 0 | 0 | 549 | 0 | 0 | 0 | 1.0 / 1.0 | 2/2 |
-| crossing_pair | clean + bearing-only intermittent | 0.50 | 1 | 2/2 | 11.01 | 11.43 | 0/172 | 0 | 0 | 413 | 0 | 0 | 0 | – | – |
-| crossing_pair | mild | 0.50 | 3 | 2/2 | 10.42 | 10.73 | 0/516 | 0 | 0 | 1667 | 0 | 17 | 0 | – | – |
-| crossing_pair | mild + 5 s outage | 0.50 | 3 | 2/2 | 10.85 | 11.01 | 0/516 | 0 | 0 | 1579 | 0 | 15 | 0 | 1.0 / 1.0 | 6/6 |
-| crossing_pair | mild + 8 s outage | 0.50 | 3 | 2/2 | 11.53 | 11.96 | 0/516 | 0 | 0 | 1534 | 0 | 15 | 0 | 1.0 / 1.0 | 6/6 |
-| crossing_pair | mild + 15 s outage | 0.50 | 3 | 2/2 | 13.91 | 15.40 | 12/516 | 6 | 0 | 1404 | 0 | 13 | 0 | 3.0 / 3.0 | 0/6 |
-| crossing_pair | moderate | 0.50 | 3 | 2/2 | 10.80 | 11.52 | 0/516 | 0 | 0 | 1612 | 0 | 28 | 0 | – | – |
-| crossing_pair | severe | 0.50 | 3 | 2/2 | 12.47 | 13.49 | 0/516 | 0 | 0 | 1402 | 1 | 70 | 1 | – | – |
-| demo | direct | – | 1 | 5/5 | 8.62 | 9.57 | 0/630 | 0 | 0 | 1950 | 0 | – | – | – | – |
-| demo | direct without bearing-only | – | 1 | 5/5 | 10.81 | 12.67 | 0/630 | 0 | 0 | 683 | 0 | – | – | – | – |
-| demo | clean | 0.50 | 1 | 5/5 | 10.55 | 11.18 | 0/630 | 0 | 0 | 1950 | 0 | 0 | 0 | – | – |
-| demo | clean + range-bearing dropout 6 s | 0.50 | 1 | 5/5 | 10.70 | 11.32 | 0/630 | 0 | 0 | 1922 | 0 | 0 | 0 | 1.0 / 1.0 | 5/5 |
-| demo | clean + bearing-only intermittent | 0.50 | 1 | 5/5 | 10.92 | 11.69 | 0/630 | 0 | 0 | 1373 | 0 | 0 | 0 | – | – |
-| demo | mild | 0.50 | 3 | 5/5 | 10.58 | 11.41 | 0/1890 | 0 | 0 | 5802 | 0 | 51 | 0 | – | – |
-| demo | mild + 5 s outage | 0.50 | 3 | 5/5 | 10.77 | 11.64 | 0/1890 | 0 | 0 | 5618 | 0 | 49 | 0 | 1.0 / 1.0 | 15/15 |
-| demo | mild + 8 s outage | 0.50 | 3 | 5/5 | 11.48 | 12.68 | 0/1890 | 0 | 0 | 5496 | 0 | 49 | 0 | 1.0 / 1.0 | 15/15 |
-| demo | mild + 15 s outage | 0.50 | 3 | 5/5 | 13.74 | 17.05 | 34/1890 | 15 | 0 | 5195 | 0 | 48 | 0 | 4.0 / 4.0 | 0/15 |
-| demo | moderate | 0.50 | 3 | 5/5 | 10.96 | 11.93 | 0/1890 | 0 | 0 | 5554 | 0 | 95 | 0 | – | – |
-| demo | severe | 0.50 | 3 | 5/5 | 12.35 | 14.45 | 14/1890 | 0 | 0 | 4869 | 5 | 246 | 5 | – | – |
-| enter_leave | direct | – | 1 | 4/4 | 8.91 | 9.98 | 0/302 | 0 | 0 | 1066 | 0 | – | – | – | – |
-| enter_leave | direct without bearing-only | – | 1 | 4/4 | 11.10 | 12.33 | 0/302 | 0 | 0 | 400 | 0 | – | – | – | – |
-| enter_leave | clean | 0.50 | 1 | 4/4 | 10.48 | 11.40 | 0/302 | 0 | 0 | 1066 | 0 | 0 | 0 | – | – |
-| enter_leave | clean + range-bearing dropout 6 s | 0.50 | 1 | 4/4 | 10.63 | 11.38 | 5/302 | 0 | 0 | 1038 | 0 | 0 | 0 | 1.0 / 1.0 | 3/3 |
-| enter_leave | clean + bearing-only intermittent | 0.50 | 1 | 4/4 | 11.13 | 11.94 | 0/302 | 0 | 0 | 781 | 0 | 0 | 0 | – | – |
-| enter_leave | mild | 0.50 | 3 | 4/4 | 10.54 | 12.01 | 0/906 | 0 | 0 | 3173 | 0 | 35 | 0 | – | – |
-| enter_leave | mild + 5 s outage | 0.50 | 3 | 4/4 | 10.84 | 12.00 | 12/906 | 0 | 0 | 2989 | 0 | 31 | 0 | 1.0 / 1.0 | 9/9 |
-| enter_leave | mild + 8 s outage | 0.50 | 3 | 4/4 | 11.67 | 13.56 | 28/906 | 4 | 0 | 2894 | 0 | 28 | 0 | 3.7 / 5.0 | 5/9 |
-| enter_leave | mild + 15 s outage | 0.50 | 3 | 4/4 | 13.53 | 19.03 | 66/906 | 9 | 0 | 2762 | 0 | 27 | 0 | 4.0 / 4.0 | 0/9 |
-| enter_leave | moderate | 0.50 | 3 | 4/4 | 11.39 | 18.01 | 9/906 | 1 | 0 | 3030 | 0 | 60 | 0 | – | – |
-| enter_leave | severe | 0.50 | 3 | 4/4 | 12.05 | 14.08 | 12/906 | 1 | 0 | 2641 | 1 | 149 | 1 | – | – |
-| formation_split | direct | – | 1 | 3/3 | 11.18 | 11.58 | 0/258 | 0 | 0 | 808 | 0 | – | – | – | – |
-| formation_split | direct without bearing-only | – | 1 | 3/3 | 27.78 | 35.62 | 1/258 | 2 | 0 | 301 | 0 | – | – | – | – |
-| formation_split | clean | 0.50 | 1 | 3/3 | 13.70 | 14.31 | 0/258 | 0 | 0 | 808 | 0 | 0 | 0 | – | – |
-| formation_split | clean + range-bearing dropout 6 s | 0.50 | 1 | 3/3 | 15.26 | 16.96 | 0/258 | 0 | 0 | 786 | 0 | 0 | 0 | 1.0 / 1.0 | 3/3 |
-| formation_split | clean + bearing-only intermittent | 0.50 | 1 | 3/3 | 28.30 | 36.46 | 1/258 | 2 | 0 | 582 | 0 | 0 | 0 | – | – |
-| formation_split | mild | 0.50 | 3 | 3/3 | 18.48 | 35.81 | 1/774 | 2 | 0 | 2399 | 0 | 27 | 0 | – | – |
-| formation_split | mild + 5 s outage | 0.50 | 3 | 3/3 | 19.16 | 35.59 | 1/774 | 2 | 0 | 2262 | 0 | 25 | 0 | 1.0 / 1.0 | 9/9 |
-| formation_split | mild + 8 s outage | 0.50 | 3 | 3/3 | 20.04 | 36.26 | 1/774 | 2 | 0 | 2187 | 0 | 24 | 0 | 1.0 / 1.0 | 9/9 |
-| formation_split | mild + 15 s outage | 0.50 | 3 | 3/3 | 22.45 | 35.71 | 21/774 | 9 | 0 | 2015 | 0 | 23 | 0 | 4.0 / 4.0 | 0/9 |
-| formation_split | moderate | 0.50 | 3 | 3/3 | 23.36 | 36.20 | 3/774 | 4 | 0 | 2301 | 0 | 55 | 0 | – | – |
-| formation_split | severe | 0.50 | 3 | 3/3 | 15.61 | 17.80 | 3/774 | 0 | 0 | 2011 | 0 | 119 | 0 | – | – |
-| straight_crossing | direct | – | 1 | 1/1 | 11.13 | 11.13 | 0/86 | 0 | 0 | 91 | 0 | – | – | – | – |
-| straight_crossing | clean | 0.50 | 1 | 1/1 | 12.83 | 12.83 | 0/86 | 0 | 0 | 91 | 0 | 0 | 0 | – | – |
-| straight_crossing | clean + range-bearing dropout 6 s | 0.50 | 1 | 1/1 | 13.89 | 13.89 | 0/86 | 0 | 0 | 85 | 0 | 0 | 0 | 1.0 / 1.0 | 1/1 |
-| straight_crossing | mild | 0.50 | 3 | 1/1 | 12.83 | 12.83 | 0/258 | 0 | 0 | 273 | 0 | 3 | 0 | – | – |
-| straight_crossing | mild + 5 s outage | 0.50 | 3 | 1/1 | 13.49 | 13.49 | 0/258 | 0 | 0 | 258 | 0 | 3 | 0 | 1.0 / 1.0 | 3/3 |
-| straight_crossing | mild + 8 s outage | 0.50 | 3 | 1/1 | 14.98 | 14.98 | 0/258 | 0 | 0 | 249 | 0 | 3 | 0 | 1.0 / 1.0 | 3/3 |
-| straight_crossing | mild + 15 s outage | 0.50 | 3 | 1/1 | 19.96 | 19.96 | 6/258 | 3 | 0 | 228 | 0 | 3 | 0 | 3.0 / 3.0 | 0/3 |
-| straight_crossing | moderate | 0.50 | 3 | 1/1 | 12.98 | 13.83 | 0/258 | 0 | 0 | 265 | 0 | 6 | 0 | – | – |
-| straight_crossing | severe | 0.50 | 3 | 1/1 | 16.14 | 18.08 | 0/258 | 0 | 0 | 232 | 0 | 12 | 0 | – | – |
-| turn | direct | – | 1 | 1/1 | 10.61 | 10.61 | 0/86 | 0 | 0 | 91 | 0 | – | – | – | – |
-| turn | clean | 0.50 | 1 | 1/1 | 15.49 | 15.49 | 0/86 | 0 | 0 | 91 | 0 | 0 | 0 | – | – |
-| turn | clean + range-bearing dropout 6 s | 0.50 | 1 | 1/1 | 18.78 | 18.78 | 0/86 | 0 | 0 | 85 | 0 | 0 | 0 | 1.0 / 1.0 | 1/1 |
-| turn | mild | 0.50 | 3 | 1/1 | 15.49 | 15.49 | 0/258 | 0 | 0 | 273 | 0 | 2 | 0 | – | – |
-| turn | mild + 5 s outage | 0.50 | 3 | 1/1 | 17.05 | 17.05 | 0/258 | 0 | 0 | 258 | 0 | 2 | 0 | 1.0 / 1.0 | 3/3 |
-| turn | mild + 8 s outage | 0.50 | 3 | 1/1 | 21.70 | 21.70 | 3/258 | 0 | 0 | 249 | 0 | 2 | 0 | 1.0 / 1.0 | 3/3 |
-| turn | mild + 15 s outage | 0.50 | 3 | 1/1 | 20.09 | 20.09 | 30/258 | 3 | 0 | 228 | 0 | 2 | 0 | 3.0 / 3.0 | 0/3 |
-| turn | moderate | 0.50 | 3 | 1/1 | 16.87 | 19.59 | 0/258 | 0 | 0 | 257 | 0 | 1 | 0 | – | – |
-| turn | severe | 0.50 | 3 | 1/1 | 23.27 | 25.45 | 9/258 | 2 | 0 | 229 | 0 | 12 | 0 | – | – |
+| close_pass | direct | – | 1 | 3/3 | 8.27 | 10.27 | 0/258 | 0 | 0 | 700 | 0 | – | – | – | – |
+| close_pass | direct without bearing-only | – | 1 | 3/3 | 11.44 | 13.10 | 0/258 | 0 | 0 | 275 | 0 | – | – | – | – |
+| close_pass | clean | 0.50 | 1 | 3/3 | 11.11 | 16.53 | 0/258 | 0 | 0 | 700 | 0 | 0 | 0 | – | – |
+| close_pass | clean + range-bearing dropout 6 s | 0.50 | 1 | 3/3 | 12.78 | 20.25 | 6/258 | 1 | 0 | 683 | 0 | 0 | 0 | 3.0 / 3.0 | 2/3 |
+| close_pass | clean + bearing-only intermittent | 0.50 | 1 | 3/3 | 12.09 | 16.53 | 0/258 | 0 | 0 | 527 | 0 | 0 | 0 | – | – |
+| close_pass | mild | 0.50 | 3 | 3/3 | 11.15 | 16.63 | 0/774 | 0 | 0 | 2079 | 0 | 23 | 0 | – | – |
+| close_pass | mild + 5 s outage | 0.50 | 3 | 3/3 | 12.61 | 20.17 | 15/774 | 3 | 0 | 1980 | 0 | 23 | 0 | 3.0 / 3.0 | 6/9 |
+| close_pass | mild + 8 s outage | 0.50 | 3 | 3/3 | 12.96 | 20.06 | 24/774 | 3 | 0 | 1919 | 0 | 23 | 0 | 3.0 / 3.0 | 6/9 |
+| close_pass | mild + 15 s outage | 0.50 | 3 | 3/3 | 14.76 | 19.79 | 60/774 | 9 | 0 | 1759 | 0 | 20 | 0 | 4.0 / 4.0 | 0/9 |
+| close_pass | moderate | 0.50 | 3 | 3/3 | 11.72 | 18.43 | 0/774 | 0 | 0 | 1985 | 0 | 38 | 0 | – | – |
+| close_pass | severe | 0.50 | 3 | 3/3 | 13.95 | 24.67 | 2/774 | 0 | 0 | 1732 | 4 | 84 | 4 | – | – |
+| crossing_pair | direct | – | 1 | 2/2 | 7.09 | 7.09 | 0/172 | 0 | 0 | 563 | 0 | – | – | – | – |
+| crossing_pair | direct without bearing-only | – | 1 | 2/2 | 9.16 | 9.28 | 0/172 | 0 | 0 | 225 | 0 | – | – | – | – |
+| crossing_pair | clean | 0.50 | 1 | 2/2 | 8.22 | 8.30 | 0/172 | 0 | 0 | 563 | 0 | 0 | 0 | – | – |
+| crossing_pair | clean + range-bearing dropout 6 s | 0.50 | 1 | 2/2 | 8.40 | 8.44 | 0/172 | 0 | 0 | 549 | 0 | 0 | 0 | 1.0 / 1.0 | 2/2 |
+| crossing_pair | clean + bearing-only intermittent | 0.50 | 1 | 2/2 | 8.64 | 8.82 | 0/172 | 0 | 0 | 413 | 0 | 0 | 0 | – | – |
+| crossing_pair | mild | 0.50 | 3 | 2/2 | 8.35 | 8.44 | 0/516 | 0 | 0 | 1667 | 0 | 17 | 0 | – | – |
+| crossing_pair | mild + 5 s outage | 0.50 | 3 | 2/2 | 8.70 | 8.79 | 0/516 | 0 | 0 | 1579 | 0 | 15 | 0 | 1.0 / 1.0 | 6/6 |
+| crossing_pair | mild + 8 s outage | 0.50 | 3 | 2/2 | 9.24 | 9.36 | 0/516 | 0 | 0 | 1534 | 0 | 15 | 0 | 1.0 / 1.0 | 6/6 |
+| crossing_pair | mild + 15 s outage | 0.50 | 3 | 2/2 | 11.01 | 11.74 | 12/516 | 6 | 0 | 1404 | 0 | 13 | 0 | 3.0 / 3.0 | 0/6 |
+| crossing_pair | moderate | 0.50 | 3 | 2/2 | 8.62 | 8.93 | 0/516 | 0 | 0 | 1612 | 0 | 28 | 0 | – | – |
+| crossing_pair | severe | 0.50 | 3 | 2/2 | 9.92 | 11.88 | 0/516 | 0 | 0 | 1402 | 1 | 70 | 1 | – | – |
+| demo | direct | – | 1 | 5/5 | 7.29 | 7.93 | 0/630 | 0 | 0 | 1950 | 0 | – | – | – | – |
+| demo | direct without bearing-only | – | 1 | 5/5 | 9.09 | 10.59 | 0/630 | 0 | 0 | 683 | 0 | – | – | – | – |
+| demo | clean | 0.50 | 1 | 5/5 | 8.67 | 9.09 | 0/630 | 0 | 0 | 1950 | 0 | 0 | 0 | – | – |
+| demo | clean + range-bearing dropout 6 s | 0.50 | 1 | 5/5 | 8.75 | 9.15 | 0/630 | 0 | 0 | 1922 | 0 | 0 | 0 | 1.0 / 1.0 | 5/5 |
+| demo | clean + bearing-only intermittent | 0.50 | 1 | 5/5 | 8.92 | 9.46 | 0/630 | 0 | 0 | 1373 | 0 | 0 | 0 | – | – |
+| demo | mild | 0.50 | 3 | 5/5 | 8.69 | 9.34 | 0/1890 | 0 | 0 | 5802 | 0 | 51 | 0 | – | – |
+| demo | mild + 5 s outage | 0.50 | 3 | 5/5 | 8.73 | 9.37 | 0/1890 | 0 | 0 | 5618 | 0 | 49 | 0 | 1.0 / 1.0 | 15/15 |
+| demo | mild + 8 s outage | 0.50 | 3 | 5/5 | 9.26 | 10.30 | 0/1890 | 0 | 0 | 5496 | 0 | 49 | 0 | 1.0 / 1.0 | 15/15 |
+| demo | mild + 15 s outage | 0.50 | 3 | 5/5 | 10.52 | 12.78 | 34/1890 | 15 | 0 | 5195 | 0 | 48 | 0 | 4.0 / 4.0 | 0/15 |
+| demo | moderate | 0.50 | 3 | 5/5 | 9.04 | 9.96 | 0/1890 | 0 | 0 | 5554 | 0 | 95 | 0 | – | – |
+| demo | severe | 0.50 | 3 | 5/5 | 10.26 | 11.66 | 14/1890 | 0 | 0 | 4869 | 5 | 246 | 5 | – | – |
+| enter_leave | direct | – | 1 | 4/4 | 7.30 | 7.85 | 0/302 | 0 | 0 | 1066 | 0 | – | – | – | – |
+| enter_leave | direct without bearing-only | – | 1 | 4/4 | 9.76 | 10.85 | 0/302 | 0 | 0 | 400 | 0 | – | – | – | – |
+| enter_leave | clean | 0.50 | 1 | 4/4 | 8.13 | 8.65 | 0/302 | 0 | 0 | 1066 | 0 | 0 | 0 | – | – |
+| enter_leave | clean + range-bearing dropout 6 s | 0.50 | 1 | 4/4 | 8.51 | 8.70 | 5/302 | 0 | 0 | 1038 | 0 | 0 | 0 | 1.0 / 1.0 | 3/3 |
+| enter_leave | clean + bearing-only intermittent | 0.50 | 1 | 4/4 | 9.03 | 9.99 | 0/302 | 0 | 0 | 781 | 0 | 0 | 0 | – | – |
+| enter_leave | mild | 0.50 | 3 | 4/4 | 8.24 | 9.57 | 0/906 | 0 | 0 | 3173 | 0 | 35 | 0 | – | – |
+| enter_leave | mild + 5 s outage | 0.50 | 3 | 4/4 | 8.55 | 9.61 | 12/906 | 0 | 0 | 2989 | 0 | 31 | 0 | 1.0 / 1.0 | 9/9 |
+| enter_leave | mild + 8 s outage | 0.50 | 3 | 4/4 | 9.90 | 13.28 | 28/906 | 4 | 0 | 2894 | 0 | 28 | 0 | 3.7 / 5.0 | 5/9 |
+| enter_leave | mild + 15 s outage | 0.50 | 3 | 4/4 | 11.11 | 16.72 | 66/906 | 9 | 0 | 2762 | 0 | 27 | 0 | 4.0 / 4.0 | 0/9 |
+| enter_leave | moderate | 0.50 | 3 | 4/4 | 8.92 | 12.64 | 9/906 | 1 | 0 | 3030 | 0 | 60 | 0 | – | – |
+| enter_leave | severe | 0.50 | 3 | 4/4 | 9.34 | 11.48 | 12/906 | 1 | 0 | 2641 | 1 | 149 | 1 | – | – |
+| formation_split | direct | – | 1 | 3/3 | 10.41 | 10.98 | 0/258 | 0 | 0 | 808 | 0 | – | – | – | – |
+| formation_split | direct without bearing-only | – | 1 | 3/3 | 26.45 | 34.27 | 0/258 | 2 | 0 | 301 | 0 | – | – | – | – |
+| formation_split | clean | 0.50 | 1 | 3/3 | 12.71 | 13.08 | 0/258 | 0 | 0 | 808 | 0 | 0 | 0 | – | – |
+| formation_split | clean + range-bearing dropout 6 s | 0.50 | 1 | 3/3 | 13.53 | 14.33 | 0/258 | 0 | 0 | 786 | 0 | 0 | 0 | 1.0 / 1.0 | 3/3 |
+| formation_split | clean + bearing-only intermittent | 0.50 | 1 | 3/3 | 27.25 | 35.63 | 0/258 | 2 | 0 | 582 | 0 | 0 | 0 | – | – |
+| formation_split | mild | 0.50 | 3 | 3/3 | 12.78 | 13.11 | 0/774 | 0 | 0 | 2399 | 0 | 27 | 0 | – | – |
+| formation_split | mild + 5 s outage | 0.50 | 3 | 3/3 | 13.31 | 13.95 | 0/774 | 0 | 0 | 2262 | 0 | 25 | 0 | 1.0 / 1.0 | 9/9 |
+| formation_split | mild + 8 s outage | 0.50 | 3 | 3/3 | 13.93 | 14.69 | 0/774 | 0 | 0 | 2187 | 0 | 24 | 0 | 1.0 / 1.0 | 9/9 |
+| formation_split | mild + 15 s outage | 0.50 | 3 | 3/3 | 15.98 | 17.42 | 21/774 | 9 | 0 | 2015 | 0 | 23 | 0 | 4.0 / 4.0 | 0/9 |
+| formation_split | moderate | 0.50 | 3 | 3/3 | 17.66 | 35.48 | 0/774 | 2 | 0 | 2301 | 0 | 55 | 0 | – | – |
+| formation_split | severe | 0.50 | 3 | 3/3 | 28.26 | 55.25 | 30/774 | 8 | 0 | 2011 | 0 | 119 | 0 | – | – |
+| straight_crossing | direct | – | 1 | 1/1 | 9.35 | 9.35 | 0/86 | 0 | 0 | 91 | 0 | – | – | – | – |
+| straight_crossing | clean | 0.50 | 1 | 1/1 | 10.38 | 10.38 | 0/86 | 0 | 0 | 91 | 0 | 0 | 0 | – | – |
+| straight_crossing | clean + range-bearing dropout 6 s | 0.50 | 1 | 1/1 | 10.97 | 10.97 | 0/86 | 0 | 0 | 85 | 0 | 0 | 0 | 1.0 / 1.0 | 1/1 |
+| straight_crossing | mild | 0.50 | 3 | 1/1 | 10.38 | 10.38 | 0/258 | 0 | 0 | 273 | 0 | 3 | 0 | – | – |
+| straight_crossing | mild + 5 s outage | 0.50 | 3 | 1/1 | 10.72 | 10.72 | 0/258 | 0 | 0 | 258 | 0 | 3 | 0 | 1.0 / 1.0 | 3/3 |
+| straight_crossing | mild + 8 s outage | 0.50 | 3 | 1/1 | 11.62 | 11.62 | 0/258 | 0 | 0 | 249 | 0 | 3 | 0 | 1.0 / 1.0 | 3/3 |
+| straight_crossing | mild + 15 s outage | 0.50 | 3 | 1/1 | 14.70 | 14.70 | 6/258 | 3 | 0 | 228 | 0 | 3 | 0 | 3.0 / 3.0 | 0/3 |
+| straight_crossing | moderate | 0.50 | 3 | 1/1 | 10.48 | 11.58 | 0/258 | 0 | 0 | 265 | 0 | 6 | 0 | – | – |
+| straight_crossing | severe | 0.50 | 3 | 1/1 | 12.78 | 13.83 | 0/258 | 0 | 0 | 232 | 0 | 12 | 0 | – | – |
+| turn | direct | – | 1 | 1/1 | 10.13 | 10.13 | 0/86 | 0 | 0 | 91 | 0 | – | – | – | – |
+| turn | clean | 0.50 | 1 | 1/1 | 14.60 | 14.60 | 0/86 | 0 | 0 | 91 | 0 | 0 | 0 | – | – |
+| turn | clean + range-bearing dropout 6 s | 0.50 | 1 | 1/1 | 16.83 | 16.83 | 0/86 | 0 | 0 | 85 | 0 | 0 | 0 | 1.0 / 1.0 | 1/1 |
+| turn | mild | 0.50 | 3 | 1/1 | 14.60 | 14.60 | 0/258 | 0 | 0 | 273 | 0 | 2 | 0 | – | – |
+| turn | mild + 5 s outage | 0.50 | 3 | 1/1 | 15.48 | 15.48 | 0/258 | 0 | 0 | 258 | 0 | 2 | 0 | 1.0 / 1.0 | 3/3 |
+| turn | mild + 8 s outage | 0.50 | 3 | 1/1 | 19.36 | 19.36 | 3/258 | 0 | 0 | 249 | 0 | 2 | 0 | 1.0 / 1.0 | 3/3 |
+| turn | mild + 15 s outage | 0.50 | 3 | 1/1 | 18.84 | 18.84 | 30/258 | 3 | 0 | 228 | 0 | 2 | 0 | 3.0 / 3.0 | 0/3 |
+| turn | moderate | 0.50 | 3 | 1/1 | 15.36 | 16.91 | 0/258 | 0 | 0 | 257 | 0 | 1 | 0 | – | – |
+| turn | severe | 0.50 | 3 | 1/1 | 20.76 | 22.70 | 6/258 | 0 | 0 | 229 | 0 | 12 | 0 | – | – |
 
 ## Filter consistency (direct engine feed)
 
@@ -131,13 +135,13 @@ Average NEES (4-dof full state, 2-dof position) over the RMSE's samples, split i
 
 | scenario | NEES4 upd. (95%) | NEES4 extr. | NEES2 upd. | NEES2 extr. | NIS range-bearing | NIS bearing-only |
 |---|---:|---:|---:|---:|---:|---:|
-| close_pass | 2.77 [3.63, 4.39] | 3.54 | 1.90 | 2.32 | 2.08 | 0.95 |
-| crossing_pair | 2.29 [3.56, 4.47] | 1.97 | 1.71 | 1.60 | 1.91 | 0.85 |
-| demo | 2.09 [3.77, 4.24] | 1.98 | 1.51 | 1.57 | 1.79 | 0.94 |
-| enter_leave | 2.16 [3.65, 4.37] | 1.77 | 1.66 | 1.29 | 1.75 | 0.86 |
-| formation_split | 2.86 [3.64, 4.38] | 2.64 | 1.88 | 1.93 | 1.80 | 0.84 |
-| straight_crossing | 1.65 [3.41, 4.64] | – | 1.24 | – | 1.52 | – |
-| turn | 3.79 [3.41, 4.64] | – | 2.30 | – | 2.29 | – |
+| close_pass | 1.96 [3.63, 4.39] | 2.14 | 1.53 | 1.76 | 1.87 | 0.89 |
+| crossing_pair | 1.90 [3.56, 4.47] | 1.29 | 1.64 | 1.11 | 1.93 | 0.85 |
+| demo | 1.59 [3.77, 4.24] | 1.29 | 1.34 | 1.07 | 1.67 | 0.91 |
+| enter_leave | 1.77 [3.65, 4.37] | 1.43 | 1.52 | 1.18 | 1.76 | 0.86 |
+| formation_split | 2.42 [3.64, 4.38] | 1.85 | 1.84 | 1.55 | 1.75 | 0.82 |
+| straight_crossing | 1.38 [3.41, 4.64] | – | 1.18 | – | 1.51 | – |
+| turn | 2.90 [3.41, 4.64] | – | 2.05 | – | 1.87 | – |
 
 ## Conditions
 

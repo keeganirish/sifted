@@ -21,3 +21,13 @@ foreach(target fuzz_sensor_table fuzz_log_header fuzz_websocket fuzz_engine)
 endforeach()
 # The WebSocket parsers live in the OS-facing library.
 target_link_libraries(fuzz_websocket PRIVATE sifted::net)
+
+# Track reports (tracker output read by the evaluation, e.g. an external
+# baseline's; eval/sifted/eval/track_report.hpp). Seed corpus:
+# fuzz/corpus_tracks/. Needs the evaluation library, which the fuzz preset
+# builds because tests are on (SIFTED_BUILD_TESTS defaults to ON).
+if(TARGET sifted::eval_support)
+  add_executable(fuzz_track_report fuzz_track_report.cpp)
+  target_link_libraries(fuzz_track_report PRIVATE sifted::eval_support sifted_options)
+  target_link_options(fuzz_track_report PRIVATE -fsanitize=fuzzer)
+endif()

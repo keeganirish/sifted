@@ -165,6 +165,40 @@ two agree. Regenerate the page after a change that moves a baseline.
 geometry; its default (100 m) leaves the page byte-identical
 (`Eval.DefaultMatchDistanceLeavesScorecardUnchanged`).
 
+### Monte Carlo evaluation and baseline comparison
+
+The scorecard scores one noise realisation per scenario.
+[`evaluation-monte-carlo.md`](evaluation-monte-carlo.md) scores 100 independent
+realisations of every multi-target scenario and a clutter × Pd sweep, with
+bootstrap intervals, GOSPA, paired comparisons and a convergence table (ADR
+0015). The sets are generated into `build/montecarlo/` (about 10 s, reused
+while current) and evaluated by `sifted_montecarlo`, about 4 minutes in all:
+
+```bash
+cmake --preset release && cmake --build --preset release
+PYTHONPATH=sim python3 -m sifted_sim.montecarlo report            # -> docs/evaluation-monte-carlo.md
+PYTHONPATH=sim python3 -m sifted_sim.montecarlo report --smoke    # a few runs, into build/montecarlo-smoke
+build/release/eval/sifted_montecarlo --help                       # trackers, external track reports, GOSPA c/p, CSV
+```
+
+[`evaluation-baseline.md`](evaluation-baseline.md) compares Sifted with a Stone
+Soup tracker on the same runs and scorer. Stone Soup lives in its own virtual
+environment and is never a dependency of the app, the installer, the default
+tests or CI (setup, configuration mapping and run counts:
+[`benchmarks/baselines/stonesoup/README.md`](../benchmarks/baselines/stonesoup/README.md);
+about 10 minutes on 22 cores):
+
+```bash
+python3 -m venv build/stonesoup-venv
+build/stonesoup-venv/bin/pip install -r benchmarks/baselines/stonesoup/requirements.txt
+build/stonesoup-venv/bin/python benchmarks/baselines/stonesoup/compare.py
+```
+
+Any tracker can be scored the same way. Write one track report per run
+(`eval/sifted/eval/track_report.hpp`: `sifted-tracks 1`, time, id, status,
+last update, state, optional covariance), then pass
+`--tracks NAME=DIR` to `sifted_montecarlo`.
+
 ### Real-data evaluation
 
 The tracker on recorded OpenSky ADS-B ([`real-data-evaluation.md`](real-data-evaluation.md)):
@@ -267,7 +301,7 @@ sim/          sensor simulators, scenarios, UDP sender with fault injection,
 web/          operator view (Leaflet bundled, no build step)
 tests/        unit tests, fixtures, ground-truth regression, degraded-network,
               fault-injection and UDP flood tests
-fuzz/         six libFuzzer targets and seed corpora
+fuzz/         seven libFuzzer targets and seed corpora
 benchmarks/   engine benchmark harness, end-to-end latency script, report generator
 eval/         shared ground-truth scoring library, the sifted_eval scorecard, the
               sifted_realeval real-data tool, realdata/ dataset manifest

@@ -131,7 +131,8 @@ void Engine::on_scan(std::span<const Measurement> scan, std::vector<MeasurementR
   }
 }
 
-Engine::LifecycleVerdict Engine::lifecycle_at(const TrackRecord& r, Timestamp t) const {
+Engine::LifecycleVerdict Engine::lifecycle_at(const TrackRecord& r, Timestamp t,
+                                              std::optional<estimation::TrackFilter>* out) const {
   const association::LifecycleConfig& lc = config_.lifecycle;
   const double max_var = lc.max_position_sigma_m * lc.max_position_sigma_m;
   const double age = seconds_between(r.last_position_time, t);
@@ -148,6 +149,8 @@ Engine::LifecycleVerdict Engine::lifecycle_at(const TrackRecord& r, Timestamp t)
     if (f.predict(seconds_between(r.time, t)) != FilterStatus::Ok ||
         !(max_position_variance(f.covariance()) <= max_var)) {
       v.drop = association::DropReason::Uncertainty;
+    } else if (out != nullptr) {
+      *out = f;  // the prediction to t, reused for gating
     }
   }
   v.coast = v.drop == association::DropReason::None && r.status == TrackStatus::Confirmed &&
@@ -155,14 +158,18 @@ Engine::LifecycleVerdict Engine::lifecycle_at(const TrackRecord& r, Timestamp t)
   return v;
 }
 
-void Engine::maintain(Timestamp t) {
+void Engine::maintain(Timestamp t, std::vector<std::optional<estimation::TrackFilter>>& predicted) {
   std::vector<std::pair<TrackId, association::DropReason>> drops;
+  predicted.clear();
+  predicted.reserve(store_.size());
   for (TrackRecord& r : store_.live()) {
-    const LifecycleVerdict v = lifecycle_at(r, t);
+    std::optional<estimation::TrackFilter> p;
+    const LifecycleVerdict v = lifecycle_at(r, t, &p);
     if (v.drop != association::DropReason::None) {
       drops.emplace_back(r.id, v.drop);
       continue;
     }
+    predicted.push_back(std::move(p));  // in live order, survivors only
     if (v.coast) {
       r.status = TrackStatus::Coasting;
       TraceEvent e;
@@ -262,42 +269,52 @@ void Engine::process_group(std::span<const Measurement> group,
     now_ = t;
 
     // ---- 2. lifecycle at the group time ---------------------------------
-    maintain(t);
+    // It predicts every track to t (the uncertainty check); the survivors'
+    // predictions, in live order, are the ones gating and updates use. Each
+    // track is predicted once per group: the same computation as predicting
+    // it again here, so results are unchanged.
+    std::vector<std::optional<estimation::TrackFilter>> predicted;
+    maintain(t, predicted);
 
     // ---- 3. gating ------------------------------------------------------
     std::vector<TrackRecord>& live = store_.live();
-    std::vector<std::optional<estimation::TrackFilter>> predicted;
-    predicted.reserve(live.size());
-    for (const TrackRecord& r : live) {
-      estimation::TrackFilter f = r.filter;
-      if (f.predict(seconds_between(r.time, t)) == FilterStatus::Ok) {
-        predicted.emplace_back(f);
-      } else {
-        predicted.emplace_back(std::nullopt);
-      }
-    }
 
     const double near_factor = config_.association.near_miss_factor;
-    // Per-track inputs of the gate screen, computed once per group: the
-    // predicted position and its largest variance for each Gaussian component
-    // of the track (one, or one per IMM mode). The gate statistic is the
-    // smallest d^2 over the components, so a pair may gate iff some component
-    // may (estimation::may_gate, ADR 0014).
-    constexpr std::size_t kMaxComponents = estimation::kImmModes;
+    // Per-track inputs of the gate screen, computed once per group. A track's
+    // gating statistic is never below the smallest d^2 of its Gaussian
+    // components (one, or one per IMM mode; ADR 0014), so a pair may gate only
+    // if some component may. For one component that is may_gate on its
+    // predicted position and largest position variance (the legacy screen,
+    // unchanged); for several, one conservative envelope test covering all of
+    // them: centre (the combined position), spread (largest distance of a
+    // component from it), the largest variance and the components' range
+    // interval from the group's sensor (estimation::may_gate_envelope).
     const bool screen = config_.association.gate_screen;
-    const std::size_t slots = screen ? live.size() * kMaxComponents : 0;
-    std::vector<double> lambda(slots, 0.0);
-    std::vector<Eigen::Vector2d> predicted_pos(slots, Eigen::Vector2d::Zero());
-    std::vector<std::size_t> components(screen ? live.size() : 0, 0);
+    const Eigen::Vector2d sensor_xy(accepted.front().ctx.pose.x_m, accepted.front().ctx.pose.y_m);
+    std::vector<double> lambda(screen ? live.size() : 0, 0.0);
+    std::vector<Eigen::Vector2d> predicted_pos(screen ? live.size() : 0, Eigen::Vector2d::Zero());
+    std::vector<estimation::GateEnvelope> envelope(screen ? live.size() : 0);
+    std::vector<char> mixture(screen ? live.size() : 0, 0);
     for (std::size_t k = 0; screen && k < live.size(); ++k) {
-      if (predicted[k]) {
-        components[k] = predicted[k]->components();
-        for (std::size_t c = 0; c < components[k]; ++c) {
-          lambda[k * kMaxComponents + c] =
-              max_position_variance(predicted[k]->component_covariance(c));
-          predicted_pos[k * kMaxComponents + c] = predicted[k]->component_state(c).head<2>();
-        }
+      if (!predicted[k]) {
+        continue;
       }
+      predicted_pos[k] = predicted[k]->state().head<2>();
+      if (predicted[k]->components() == 1) {
+        lambda[k] = max_position_variance(predicted[k]->covariance());
+        continue;
+      }
+      mixture[k] = 1;
+      double lam = 0.0;
+      double spread = 0.0;
+      for (std::size_t c = 0; c < predicted[k]->components(); ++c) {
+        lam = std::max(lam, max_position_variance(predicted[k]->component_covariance(c)));
+        spread = std::max(spread,
+                          (predicted[k]->component_state(c).head<2>() - predicted_pos[k]).norm());
+      }
+      // 1e-12: the norms' own rounding.
+      envelope[k] =
+          estimation::make_envelope(predicted_pos[k], spread * (1.0 + 1e-12), lam, sensor_xy);
     }
     std::vector<Candidate> candidates;
     for (std::size_t j = 0; j < accepted.size(); ++j) {
@@ -310,15 +327,10 @@ void Engine::process_group(std::span<const Measurement> group,
         if (!predicted[k]) {
           continue;
         }
-        if (screen) {
-          bool may = false;
-          for (std::size_t c = 0; c < components[k] && !may; ++c) {
-            may = estimation::may_gate(gs, predicted_pos[k * kMaxComponents + c],
-                                       lambda[k * kMaxComponents + c], limit);
-          }
-          if (!may) {
-            continue;
-          }
+        if (screen &&
+            !(mixture[k] != 0 ? estimation::may_gate_envelope(gs, envelope[k], limit)
+                              : estimation::may_gate(gs, predicted_pos[k], lambda[k], limit))) {
+          continue;
         }
         auto gated = predicted[k]->gate(accepted[j].ctx);
         if (!gated) {

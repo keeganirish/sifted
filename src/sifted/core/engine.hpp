@@ -252,13 +252,16 @@ class Engine {
 
  private:
   void process_group(std::span<const Measurement> group, std::vector<MeasurementResult>& out);
-  void maintain(Timestamp t);
+  // Lifecycle at t; `predicted` gets the kept tracks' predictions to t, in live order.
+  void maintain(Timestamp t, std::vector<std::optional<estimation::TrackFilter>>& predicted);
   struct LifecycleVerdict {
     association::DropReason drop = association::DropReason::None;
     bool coast = false;
   };
   // What the lifecycle decides for a track at `t`. Changes nothing.
-  LifecycleVerdict lifecycle_at(const store::TrackRecord& r, Timestamp t) const;
+  // With `out`, a track that is kept gets its prediction to `t` there.
+  LifecycleVerdict lifecycle_at(const store::TrackRecord& r, Timestamp t,
+                                std::optional<estimation::TrackFilter>* out = nullptr) const;
   void update_manoeuvre(store::TrackRecord& r, double d2, Timestamp t);
   void update_mode_indication(store::TrackRecord& r, Timestamp t);
   TrackEstimate estimate_of(const store::TrackRecord& r) const;

@@ -1,8 +1,12 @@
 # Benchmarks
 
-> Measured in M3 on the development sandbox. Every number below was produced
-> by the commands in "Reproduce" and is in the CSV files next to this report;
-> nothing is extrapolated. Absolute numbers are machine-specific.
+> Measured in M3 on the development sandbox, with the constant-velocity filter
+> that was then the only estimator. Every number below was produced by the
+> commands in "Reproduce" and is in the CSV files next to this report; nothing
+> is extrapolated. Absolute numbers are machine-specific. The cost of the IMM
+> (ADR 0014), now the default estimator, was measured later on a different
+> machine, against the legacy filter on that same machine:
+> [Motion models](#motion-models-legacy-cv-against-the-imm-adr-0014).
 
 ## Machine and build
 
@@ -123,6 +127,69 @@ Profiled with callgrind on a RelWithDebInfo build (`sifted_bench profile`,
   The screen itself (`may_gate`, ~40%) and `process_group` bookkeeping
   (~35%) now dominate. The next step would be a spatial index so that not
   every pair is screened; deferred (design.md section 11).
+
+## Motion models: legacy CV against the IMM (ADR 0014)
+
+Both estimators measured back to back on one machine with the method above
+(5 runs per configuration, same seeded workload). Raw output:
+[`motion_model_cv.csv`](benchmarks/motion_model_cv.csv),
+[`motion_model_imm.csv`](benchmarks/motion_model_imm.csv). Machine: Intel Core
+Ultra 7 155H laptop, 22 logical CPUs, 7.8 GB visible to WSL2 (Ubuntu 24.04,
+kernel 6.18), GCC 13.3, `release` preset, sources on the Windows file system.
+Not the M3 sandbox, so compare the two columns with each other, not with the
+tables above. A laptop's clock and background load make the tails noisy.
+
+| targets | clutter/scan | live tracks cv / imm | median ms cv | median ms imm | imm / cv | p99 ms cv | p99 ms imm |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10 | 1 | 14 / 14 | 0.008 | 0.022 | 2.66 | 0.011 | 0.026 |
+| 100 | 10 | 142 / 142 | 0.147 | 0.303 | 2.06 | 0.185 | 0.504 |
+| 300 | 30 | 426 / 425 | 0.935 | 1.480 | 1.58 | 1.378 | 1.590 |
+| 300 | 300 | 1429 / 1459 | 6.507 | 10.255 | 1.58 | 8.132 | 15.346 |
+| 1000 | 0 | 1019 / 1019 | 6.615 | 7.958 | 1.20 | 8.089 | 10.043 |
+| 1000 | 100 | 1408 / 1409 | 9.097 | 11.542 | 1.27 | 10.787 | 13.388 |
+| 1000 | 1000 | 4664 / 4836 | 86.537 | 91.134 | 1.05 | 96.971 | 103.523 |
+| 3000 | 0 | 3066 / 3062 | 58.019 | 62.490 | 1.08 | 62.533 | 65.476 |
+| 3000 | 300 | 4194 / 4205 | 80.036 | 92.939 | 1.16 | 109.893 | 98.413 |
+| 3000 | 3000 | 14505 / 13351 | 759.303 | 816.487 | 1.08 | 812.340 | 864.592 |
+
+| | legacy cv | imm | imm / cv |
+|---|---:|---:|---:|
+| throughput, 300 targets + 30 clutter, back to back | 327 271 meas/s | 212 875 meas/s | 0.65 |
+| tracks per core, p99 ≤ 100 ms at 1 Hz, 10% clutter | 2 976 | 2 898 | 0.97 |
+
+- **Where the cost is.** The IMM's extra work is per track: three modes to mix,
+  predict and update, and three linearisations for each measurement that
+  reaches the full gate test. The per-pair gate screen costs the same for both.
+  Small pictures, and the throughput workload (300 targets), therefore pay
+  1.6-2.7x. At 1 000-3 000 targets the all-pairs screen dominates, and the IMM
+  costs 5-27% more per scan.
+- **Tracks per core.** The IMM's budget limit is within 3% of the legacy
+  filter's. The bisection's p99 is noisy on this machine: three bisections of
+  the unchanged legacy filter in one day gave 2 039, 2 664 and 2 976. The
+  per-scan medians above are the more robust comparison.
+- **The optimisation behind it.** The first IMM measurement on this machine
+  gave 1 532 tracks per core against 2 664 for the legacy filter. The profile
+  (gprof, 1 000 targets + 100 clutter) showed the gate screen run once per
+  mode for every measurement-track pair, plus every track predicted twice per
+  group. Two results-neutral changes fixed both:
+  - one conservative envelope test per pair covering all modes
+    (`estimation::may_gate_envelope`; proof in measurement_model.hpp,
+    exercised by `GateScreen.ImmBoundIsConservativeOnRandomPairs`);
+  - the lifecycle check's prediction reused for gating.
+
+  Both scorecards and every pinned baseline are unchanged, and
+  `GateScreen.NeverChangesResults` and `fuzz_engine` check the screen on and off.
+
+Reproduce, from the repository root:
+
+```bash
+cmake --preset release && cmake --build --preset release
+for m in cv imm; do
+  build/release/benchmarks/sifted_bench scan --motion-model $m > scan_$m.csv
+  build/release/benchmarks/sifted_bench throughput --motion-model $m > throughput_$m.csv
+  build/release/benchmarks/sifted_bench capacity --motion-model $m > capacity_$m.csv
+done
+```
 
 ## End-to-end latency (daemon)
 

@@ -14,15 +14,19 @@ add_executable(sifted_tests
   gate_screen_test.cpp
   imm_test.cpp
   geodetic_test.cpp
+  gospa_test.cpp
   impairment_test.cpp
   ingest_test.cpp
   live_reliability_test.cpp
   measurement_test.cpp
+  montecarlo_smoke_test.cpp
+  montecarlo_stats_test.cpp
   multi_target_regression_test.cpp
   realdata_test.cpp
   reorder_test.cpp
   scenario_regression_test.cpp
   sensor_table_test.cpp
+  track_report_test.cpp
   track_store_test.cpp
   udp_flood_test.cpp
   websocket_test.cpp
@@ -48,6 +52,13 @@ endif()
 if(TARGET sifted_eval)
   add_dependencies(sifted_tests sifted_eval)
   target_compile_definitions(sifted_tests PRIVATE SIFTED_EVAL_BIN="$<TARGET_FILE:sifted_eval>")
+endif()
+# MonteCarloSmoke.* runs sifted_montecarlo on a manifest of fixtures
+# (tests/montecarlo_smoke_test.cpp).
+if(TARGET sifted_montecarlo)
+  add_dependencies(sifted_tests sifted_montecarlo)
+  target_compile_definitions(sifted_tests PRIVATE
+    SIFTED_MONTECARLO_BIN="$<TARGET_FILE:sifted_montecarlo>")
 endif()
 
 # Real-data evaluation end to end (sim/tests/test_realeval.py EndToEnd): a

@@ -113,6 +113,51 @@ bool may_gate(const GateScreen& s, const Eigen::Vector2d& position, double lambd
   return !(d2 > kSafety * bound) || !std::isfinite(bound);
 }
 
+GateEnvelope make_envelope(const Eigen::Vector2d& center, double spread, double lambda,
+                           const Eigen::Vector2d& sensor) noexcept {
+  GateEnvelope e;
+  e.center = center;
+  e.spread = spread;
+  e.lambda = lambda;
+  e.sensor = sensor;
+  const double rc = (center - sensor).norm();
+  e.r_lo = rc - spread;
+  e.r_hi = rc + spread;
+  e.valid = center.allFinite() && sensor.allFinite() && lambda >= 0.0 && std::isfinite(lambda) &&
+            spread >= 0.0 && std::isfinite(spread) && std::isfinite(rc);
+  return e;
+}
+
+bool may_gate_envelope(const GateScreen& s, const GateEnvelope& e, double limit) noexcept {
+  constexpr double kSafety = 1.0 + 1e-6;
+  if (s.kind == GateScreen::Kind::None || !e.valid) {
+    return true;
+  }
+  double bound = 0.0;
+  if (s.kind == GateScreen::Kind::Position) {
+    bound = limit * (e.lambda + s.var_range);
+  } else {
+    // The range interval was computed from this sensor; never trust it for another.
+    if (!(s.sensor == e.sensor) || !(e.r_lo > 0.0)) {
+      return true;
+    }
+    // The single-component bound B(r) = limit (lambda (1 + r_m / r) + sigma_r^2
+    // + r_m r sigma_b^2) is convex in the component's range r, which lies in
+    // [r_lo, r_hi]: its maximum there is at an end.
+    auto b = [&](double r) {
+      return limit * (e.lambda * (1.0 + s.range / r) + s.var_range + s.range * r * s.var_bearing);
+    };
+    bound = std::max(b(e.r_lo), b(e.r_hi));
+  }
+  // Skip iff D - spread > sqrt(B') with B' = kSafety B, D the distance from
+  // the centre. Without a square root: (sqrt(B') + spread)^2 <= 2 B' + 2
+  // spread^2, so D^2 > 2 B' + 2 spread^2 implies it (a looser, still
+  // conservative test).
+  const double d2 = (s.point - e.center).squaredNorm();
+  const double reject = 2.0 * kSafety * bound + 2.0 * e.spread * e.spread;
+  return !(d2 > reject) || !std::isfinite(reject);
+}
+
 FilterStatus apply(ConstantVelocityFilter& f, const AnyLinearized& l) noexcept {
   return std::visit(
       [&f](const auto& v) {

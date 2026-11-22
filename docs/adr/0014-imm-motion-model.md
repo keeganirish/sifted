@@ -150,7 +150,8 @@ decision behind them. They are available in `TrackEstimate::mode_probabilities`.
   switches fall from 2.0-6.8 to 0.0-0.9 per run and missed instants from
   4.5-13.6% to 0-2.9% from 1 g up. Mean RMSE improves on all seven fixtures
   and in every scorecard condition. ID switches are fewer or equal in every
-  condition except severe impairment (docs/evaluation.md).
+  condition except severe impairment (9 against 3 over 21 runs, worst target
+  RMSE 55 m against 29 m, all in formation_split; docs/evaluation.md).
   The cost, kept in plain view:
   - **Dense formations.** Over the ten re-seeded copies of every multi-target
     scenario, identity is better with the IMM everywhere except
@@ -165,8 +166,27 @@ decision behind them. They are available in `TrackEstimate::mode_probabilities`.
     re-initiates 27% of 200 runs within 90 s. The mixture gate discounts a
     detection from a mode the track thinks improbable. The estimator itself is
     nearly consistent there (NEES4 4.15-4.22, NIS 2.00/2).
-  - **Compute.** About 1.5-2x the per-track estimation work: measured in
-    docs/benchmarks.md.
+  - **Clutter.** The IMM's manoeuvre modes let clutter build tracks more
+    easily. In the Monte Carlo clutter sweep (ADR 0015) it confirms more false
+    tracks than Sifted's constant-velocity configurations and the Stone Soup
+    baseline from about 5 clutter points per scan up (docs/evaluation-baseline.md).
+  - **Real ADS-B prediction.** Against withheld real reports
+    (docs/real-data-evaluation.md, evaluation A) the IMM predicts slightly
+    worse than the legacy filter did: median 8.8 against 7.5 m at 2-5 s, and
+    93.5 against 83.7 m at 40-80 s. Real paths with simulated sensors
+    (evaluation B) improve: per-window median 13.8 against 15.2 m, p95 21.7
+    against 36.6 m. At the live REST cadence it fragments less (2 against 8).
+  - **Compute.** Three modes per track cost more estimation work. The first
+    implementation also screened every measurement-track pair once per mode,
+    which cut tracks per core from 2 664 (legacy) to 1 532 on the measuring
+    machine. One envelope screen covering all modes
+    (`estimation::may_gate_envelope`), and one prediction per track per group,
+    fixed that without changing any result. Measured on one machine
+    (docs/benchmarks.md, "Motion models"):
+    - tracks per core: 2 898 against 2 976 for the legacy filter (97%);
+    - per-scan time at 1 000-3 000 targets: +5% to +27%;
+    - small pictures and the 300-target throughput workload, where estimation
+      dominates: 1.6-2.7x per scan, 213 000 against 327 000 measurements/s.
 - The legacy estimator stays selectable, tested (every regression, gate-screen,
   consistency and replay test runs both) and documented. It is the baseline of
   docs/motion-model-evaluation.md and the behaviour of every older recording.
