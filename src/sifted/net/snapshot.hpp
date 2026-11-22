@@ -12,7 +12,7 @@
 // Track snapshot JSON, version 2: the immutable message the publisher sends
 // to read-only WebSocket clients (threat model B3). One object per message:
 //
-//   {"type":"sifted.tracks","version":1,"seq":<n>,"time_ns":<engine time>,
+//   {"type":"sifted.tracks","version":2,"seq":<n>,"time_ns":<engine time>,
 //    "origin":{"lat":..,"lon":..,"alt":..} | null,
 //    "feed":{"state":"waiting|live|degraded|stale",       // only with feed staleness on
 //            "age_ms":<n>|null,"predicted_ms":<n>,

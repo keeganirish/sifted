@@ -1,6 +1,6 @@
 # Demo runbook
 
-A step-by-step script for recording the M3 demo video: crossing targets, a
+A step-by-step script for recording a demo video: crossing targets, a
 target entering and one leaving coverage, a manoeuvring target, camera
 fusion, and a network outage with recovery, then a bit-for-bit replay.
 
@@ -114,7 +114,7 @@ $FUSIOND --replay /tmp/demo.siftlog --pace 1 --hold
 - `--speed N` scales the scenario but not the proxy: jitter and the outage
   are in wall-clock time, so at `--speed 10` a 150 ms jitter is 1.5 s of
   scenario time. Use `--speed 1` for the video.
-- Rehearsed in the sandbox (no browser there): daemon + proxy + sender at
+- Rehearsed headless (without a browser): daemon + proxy + sender at
   `--speed 10` with a sensor restart injected; 117 frames lost to the outage,
   89 to loss, 28 duplicates suppressed, 0 out of order, and the replay was
   byte-identical to the live output.

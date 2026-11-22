@@ -127,17 +127,23 @@ def default_data_dir() -> pathlib.Path:
     return pathlib.Path(base) / "sifted"
 
 
+def requested_fusiond(explicit: str | None) -> str | None:
+    """The daemon path the user asked for (--fusiond, else SIFTED_FUSIOND), if any."""
+    return explicit or os.environ.get("SIFTED_FUSIOND") or None
+
+
 def find_fusiond(explicit: str | None) -> pathlib.Path | None:
-    candidates = []
-    if explicit:
-        candidates.append(pathlib.Path(explicit))
-    if os.environ.get("SIFTED_FUSIOND"):
-        candidates.append(pathlib.Path(os.environ["SIFTED_FUSIOND"]))
-    for preset in ("app", "release", "dev", "asan"):
-        candidates.append(ROOT / "build" / preset / "src" / "apps" / "sifted_fusiond")
-    on_path = shutil.which("sifted_fusiond")
-    if on_path:
-        candidates.append(pathlib.Path(on_path))
+    # A path the user asked for is used alone: silently running a different
+    # build than the one requested would hide the mistake.
+    requested = requested_fusiond(explicit)
+    if requested:
+        candidates = [pathlib.Path(requested)]
+    else:
+        candidates = [ROOT / "build" / preset / "src" / "apps" / "sifted_fusiond"
+                      for preset in ("app", "release", "dev", "asan")]
+        on_path = shutil.which("sifted_fusiond")
+        if on_path:
+            candidates.append(pathlib.Path(on_path))
     for c in candidates:
         if c.is_file() and os.access(c, os.X_OK):
             return c.resolve()
@@ -1133,8 +1139,14 @@ def check(cfg: argparse.Namespace) -> int:
     py = sys.version_info
     line(py >= (3, 10), "Python", f"{platform.python_version()} ({sys.executable})")
     exe = find_fusiond(cfg.fusiond)
-    line(exe is not None, "Fusion service", str(exe) if exe else
-         "not built - run ./install.sh (install.cmd on Windows)")
+    requested = requested_fusiond(cfg.fusiond)
+    if exe:
+        detail = str(exe)
+    elif requested:
+        detail = f"{requested} is not an executable file - check --fusiond / SIFTED_FUSIOND"
+    else:
+        detail = "not built - run ./install.sh (install.cmd on Windows)"
+    line(exe is not None, "Fusion service", detail)
     if exe:
         r = subprocess.run([str(exe), "--version"], capture_output=True, text=True)
         line(r.returncode == 0, "  runs", (r.stdout or r.stderr).strip())
@@ -1246,7 +1258,10 @@ def main(argv: list[str] | None = None) -> int:
     bar = "-" * 60
     print(bar)
     print(f"  Sifted {VERSION} is running:  {url}")
-    if fusiond is None:
+    if fusiond is None and requested_fusiond(cfg.fusiond):
+        print(f"  WARNING: {requested_fusiond(cfg.fusiond)} is not an executable file;"
+              " check --fusiond / SIFTED_FUSIOND.")
+    elif fusiond is None:
         print("  WARNING: the fusion service is not built; run ./install.sh first.")
     print(f"  Recordings: {cfg.data_dir / 'runs'}")
     if cfg.background:

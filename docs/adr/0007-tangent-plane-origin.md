@@ -1,7 +1,7 @@
 # ADR 0007: Fixed tangent-plane origin per run, recorded in the log
 
-Status: accepted (M2). *Written down in M3 from the M2 implementation, which
-referred to it. Resolves design.md open question 1.*
+Status: accepted (M2). *Recorded retrospectively in M3 from the M2
+implementation, which referenced it. Resolves design.md open question 1.*
 
 ## Context
 The tracker works in a flat local x/y frame. Geodetic inputs (ADS-B) must be

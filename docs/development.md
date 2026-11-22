@@ -60,8 +60,8 @@ mkdir -p build/fuzz-work/engine
 build/fuzz/fuzz/fuzz_engine build/fuzz-work/engine fuzz/corpus_engine -max_total_time=60
 ```
 
-Six targets (`fuzz_decode`, `fuzz_event_log`, `fuzz_log_header`,
-`fuzz_sensor_table`, `fuzz_websocket`, `fuzz_engine`); see
+Seven targets (`fuzz_decode`, `fuzz_event_log`, `fuzz_log_header`,
+`fuzz_sensor_table`, `fuzz_track_report`, `fuzz_websocket`, `fuzz_engine`); see
 [`fuzz/README.md`](../fuzz/README.md).
 
 ## Running the pieces by hand

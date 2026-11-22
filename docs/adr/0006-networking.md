@@ -1,7 +1,7 @@
 # ADR 0006: POSIX UDP ingest, (seq, time) duplicate suppression, minimal read-only WebSocket server
 
-Status: accepted (M2; amended M3). *Written down in M3 from the M2
-implementation, which referred to it.*
+Status: accepted (M2; amended M3). *Recorded retrospectively in M3 from
+the M2 implementation, which referenced it.*
 
 ## Context
 Sensors send small datagrams; operators need a live stream in a browser.

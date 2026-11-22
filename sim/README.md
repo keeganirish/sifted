@@ -1,6 +1,6 @@
 # sim
 
-Sensor simulators and scenario generators (Python, standard library only for now).
+Sensor simulators and scenario generators (Python, standard library only: no third-party dependencies).
 
 | Module | What it does |
 |---|---|

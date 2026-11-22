@@ -42,7 +42,7 @@ jobs:
       - name: Allow TSan's shadow memory layout
         # Recent kernels randomise mmap with 32 bits, which ThreadSanitizer
         # cannot work with ("unexpected memory mapping"). Environmental, not a
-        # code issue; see README "Sanitizers".
+        # code issue; see docs/development.md, "Presets".
         if: matrix.preset == 'tsan'
         run: sudo sysctl vm.mmap_rnd_bits=28
       - run: cmake --preset ${{ matrix.preset }}

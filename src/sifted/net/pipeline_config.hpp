@@ -34,7 +34,7 @@ struct PipelineConfig {
   // reorder_window_s of *receive* time and released in measurement-time
   // order, so delay jitter does not turn into out-of-order drops or split
   // scans. 0 disables the stage: frames go to scan assembly in arrival order
-  // (the M2 behaviour). At most reorder_capacity frames are held; beyond that
+  // (the behaviour before ADR 0009). At most reorder_capacity frames are held; beyond that
   // the oldest measurement is released early (counted).
   double reorder_window_s = 0.0;
   std::size_t reorder_capacity = 4096;

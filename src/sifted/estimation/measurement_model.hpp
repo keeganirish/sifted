@@ -60,7 +60,7 @@ std::optional<AnyLinearized> linearize(const MeasurementContext& c, const StateV
 std::optional<double> mahalanobis2(const ConstantVelocityFilter& f,
                                    const AnyLinearized& l) noexcept;
 
-// Gate screen (M3 performance; docs/design.md section 10, ADR 0011): a cheap
+// Gate screen (performance; docs/design.md section 10, ADR 0011): a cheap
 // test, per (measurement, track) pair, that is false only when the pair's
 // squared Mahalanobis distance is certainly greater than `limit`, so
 // linearize() and mahalanobis2() -- an atan2, a Jacobian, H P H^T and a

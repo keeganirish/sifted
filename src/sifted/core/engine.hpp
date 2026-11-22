@@ -33,7 +33,7 @@ namespace sifted {
 //     no wall clock, no RNG seeded from the machine, and iterates no container
 //     whose order depends on addresses or hashes. Ties are broken by track id.
 //
-// M2: many tracks, many sensors. Each group of measurements that share a
+// Many tracks, many sensors. Each group of measurements that share a
 // sensor and a timestamp (one radar scan, or a single measurement) is
 // processed jointly:
 //   1. screen: validity, sensor table lookup, kind, duplicates, ordering;

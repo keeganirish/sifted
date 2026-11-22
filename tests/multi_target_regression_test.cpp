@@ -9,8 +9,9 @@
 // second, every target that exists, flagged when it is inside radar coverage
 // (truth.csv layout 2, with a target_id and a covered flag; see
 // tests/fixtures/README.md). Loading and the CLEAR-MOT style scoring live in
-// scenario_support.{hpp,cpp} (shared with the degraded-network and fault
-// tests since M3); the definitions are documented there.
+// eval/sifted/eval/ (reached through tests/scenario_support.hpp, and shared
+// with the degraded-network and fault tests and sifted_eval); the definitions
+// are documented there.
 //
 // Thresholds: the raw radar error is 15-30 m across these geometries and the
 // M1 filter averages it to ~0.5-0.7x on a single target; fusing the camera

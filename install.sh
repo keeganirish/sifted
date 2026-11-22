@@ -69,7 +69,7 @@ die() {
     printf '\n%sLast lines of %s:%s\n' "$DIM" "$LOG" "$RST" >&2
     tail -n 25 "$LOG" | sed 's/^/    /' >&2
   fi
-  printf '\nSee the Troubleshooting section of README.md, then run ./install.sh again.\n' >&2
+  printf '\nSee Troubleshooting in docs/install.md, then run ./install.sh again.\n' >&2
   exit 1
 }
 # Runs a command with its output in the log; shows a spinner on a terminal.
@@ -444,5 +444,5 @@ else
   [[ "$OS" == Darwin && $SHORTCUT -eq 1 ]] && echo "  or double-click:  Sifted.command on your Desktop"
   [[ "$OS" == Linux && $IS_WSL -eq 0 && $SHORTCUT -eq 1 ]] && echo "  or open:          Sifted, from your applications menu"
 fi
-echo "  It opens in your browser at http://127.0.0.1:8000/"
+echo "  The operator view is served at http://127.0.0.1:8000/ (or the next free port)"
 echo

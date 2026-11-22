@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -73,7 +74,7 @@ constexpr const char* kUsage =
     "  --rate-burst B          per-source burst allowance (datagrams)  [4096]\n"
     "  --rate-sources N        source addresses tracked (LRU beyond)   [1024]\n"
     "  --reorder-window S      hold frames S seconds and release them in measurement-time\n"
-    "                          order (ADR 0009; 0: off, M2 behaviour)  [0.5]\n"
+    "                          order (ADR 0009; 0: off, arrival order) [0.5]\n"
     "  --max-time-ahead S      reject frames stamped more than S seconds after their receive\n"
     "                          time (ADR 0010; needs wall-clock senders; 0: off) [0]\n"
     "  --max-time-jump S       quarantine frames more than S seconds off the current timeline,\n"
@@ -460,7 +461,9 @@ void print_pipeline_stats(const net::Pipeline& p) {
 int run_replay(const Options& o) {
   std::ifstream in(o.replay_file, std::ios::binary);
   if (!in) {
-    std::fprintf(stderr, "sifted_fusiond: cannot read %s\n", o.replay_file.c_str());
+    const int err = errno;
+    std::fprintf(stderr, "sifted_fusiond: cannot read %s: %s\n", o.replay_file.c_str(),
+                 std::strerror(err));
     return 1;
   }
   auto reader = replay::EventLogReader::open(
@@ -551,7 +554,9 @@ int run_replay(const Options& o) {
 int run_live(const Options& o) {
   const auto text = read_small_file(o.sensors_file, kMaxSensorTableTextSize);
   if (!text) {
-    std::fprintf(stderr, "sifted_fusiond: cannot read %s\n", o.sensors_file.c_str());
+    const int err = errno;
+    std::fprintf(stderr, "sifted_fusiond: cannot read sensor table %s: %s\n",
+                 o.sensors_file.c_str(), std::strerror(err));
     return 1;
   }
   const auto table = parse_sensor_table(*text);

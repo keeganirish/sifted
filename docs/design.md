@@ -104,7 +104,7 @@ Scope is cut before polish. Each milestone ends with green CI and updated docs.
   UDP ingest; record and replay; WebSocket stream and Leaflet map; ADS-B.
 - **M3:** degraded-network simulator and tests; fault injection; fuzzing of
   every parser and of the engine; benchmarks; design doc, threat model, demo
-  runbook (the video itself is to be recorded from `docs/demo.md`).
+  runbook (`docs/demo.md`).
 - **Stretch:** CUDA association, only after M3.
 
 ## 6. Estimation and association
@@ -449,7 +449,7 @@ and says "partial".
 
 ## 10. Performance
 
-Full report: [`benchmarks.md`](benchmarks.md). Summary (sandbox VM, 2 vCPU
+Full report: [`benchmarks.md`](benchmarks.md). Summary (2 vCPU virtual machine,
 Xeon, GCC 13 `-O3`, 5 runs per configuration, the legacy constant-velocity
 filter; the IMM's relative cost follows the list):
 
@@ -465,7 +465,7 @@ filter; the IMM's relative cost follows the list):
   502 / 519 ms with the default 0.5 s window.
 
 **IMM (ADR 0014), measured against the legacy filter on one machine** (a
-laptop, not the sandbox; benchmarks.md, "Motion models"): 2 898 against
+laptop, not that virtual machine; benchmarks.md, "Motion models"): 2 898 against
 2 976 tracks per core (97%). Per-scan time is +5% to +27% at 1 000-3 000
 targets, where the all-pairs screen dominates. Small pictures and the
 300-target throughput run, where estimation dominates, cost 1.6-2.7x

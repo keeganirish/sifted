@@ -1,6 +1,6 @@
 # Benchmarks
 
-> Measured in M3 on the development sandbox, with the constant-velocity filter
+> Measured on the 2 vCPU virtual machine described below, with the constant-velocity filter
 > that was then the only estimator. Every number below was produced by the
 > commands in "Reproduce" and is in the CSV files next to this report; nothing
 > is extrapolated. Absolute numbers are machine-specific. The cost of the IMM
@@ -14,7 +14,7 @@
 |---|---|
 | CPU | Intel Xeon (virtualised, model not exposed), 2 vCPUs, 1 thread per core |
 | Memory | 8 GB |
-| OS | Ubuntu 24.04 userland, Linux 6.18 (sandbox VM) |
+| OS | Ubuntu 24.04 userland, Linux 6.18 (virtual machine) |
 | Compiler | GCC 13.3.0, `release` preset (`-O3 -DNDEBUG -ffp-contract=off`), Eigen 3.4.0 |
 | Load | other work was running on the second vCPU during part of the runs (the "before" column in particular); the run-to-run spread is reported |
 
@@ -136,7 +136,7 @@ Both estimators measured back to back on one machine with the method above
 [`motion_model_imm.csv`](benchmarks/motion_model_imm.csv). Machine: Intel Core
 Ultra 7 155H laptop, 22 logical CPUs, 7.8 GB visible to WSL2 (Ubuntu 24.04,
 kernel 6.18), GCC 13.3, `release` preset, sources on the Windows file system.
-Not the M3 sandbox, so compare the two columns with each other, not with the
+Not the virtual machine above, so compare the two columns with each other, not with the
 tables above. A laptop's clock and background load make the tails noisy.
 
 | targets | clutter/scan | live tracks cv / imm | median ms cv | median ms imm | imm / cv | p99 ms cv | p99 ms imm |

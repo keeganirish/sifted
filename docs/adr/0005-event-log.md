@@ -1,8 +1,8 @@
 # ADR 0005: Append-only event log of engine-thread input, replayed through the same pipeline
 
-Status: accepted (M2; amended M3). *Written down in M3 from the M2
-implementation (`src/sifted/replay/event_log.hpp` holds the normative format
-description), which referred to it.*
+Status: accepted (M2; amended M3). *Recorded retrospectively in M3 from
+the M2 implementation, which referenced it. `src/sifted/replay/event_log.hpp`
+holds the normative format description.*
 
 ## Context
 Replay must reproduce a live run's output bit for bit (ADR 0002). The live

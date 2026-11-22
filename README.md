@@ -14,6 +14,37 @@ are published over WebSocket to a live map. Every input is recorded with its
 receive time, so any run, including one with packet loss or sensor faults, can be
 replayed and compared byte for byte with the original output.
 
+Tracking is hard here because the inputs disagree: sensors measure different
+things (range and bearing, bearing only, latitude and longitude), arrive late,
+duplicated or not at all, and targets fly close together and manoeuvre. The
+system has to decide every scan which measurement belongs to which aircraft,
+and be able to show afterwards exactly why.
+
+## Highlights
+
+Accuracy results are from seeded simulations scored against ground truth.
+Real aircraft data is evaluated separately, and the tracker does worse there.
+
+- **Accuracy:** position RMSE 9.35 m against 22.2 m for unfiltered radar on
+  straight flight. Over 500 simulated multi-target runs, mean RMSE 10.02 m,
+  and 9.2% of runs lose a target's identity at least once.
+- **Determinism:** a recorded live run, including packet loss, duplicates and a
+  sensor restart, replays bit for bit (2,056 output lines identical under `cmp`).
+- **Degraded networks:** a bounded reorder window cuts out-of-order drops from
+  29.0% to 0.1% at the severe impairment level.
+- **Untrusted input:** 7 fuzz targets cover every C++ parser of external input,
+  and ThreadSanitizer runs over the whole test suite.
+- **Known weaknesses:** on real OpenSky ADS-B data the tracker predicts worse
+  than dead reckoning, and from 5 clutter points per scan up the default IMM
+  confirms more false tracks than a Stone Soup baseline. Both are measured and
+  reported below.
+
+Every figure links to its test or report in
+[Engineering evidence](#engineering-evidence). The installers, desktop launcher
+and operator map are there so the system can be run and inspected, not as
+claims in themselves; see [Quick start](#quick-start).
+[How this was built](#how-this-was-built) describes the role of AI assistance.
+
 <p align="center">
   <img src="docs/images/running.png" alt="Sifted running the guided demo: five tracks on an OpenStreetMap background, with the run's progress and a timeline of what to watch in the side panel" width="900">
 </p>
@@ -91,7 +122,7 @@ Measurements on recorded aircraft are kept apart, in
 | **Untrusted input.** Every C++ parser of external input is fuzzed with ASan and UBSan | 7 libFuzzer targets, each run for 60 s in CI. `fuzz_engine` also checks that results match an engine without the gate screen | [`fuzz/`](fuzz/README.md), [threat model](docs/threat-model.md), [CI](.github/workflows/ci.yml) |
 | **Concurrency.** ThreadSanitizer runs over the whole test suite | Includes live UDP flood tests with a concurrent consumer. A burst of 5,000 malformed datagrams enqueues 0 frames | `UdpFlood.*` in [`udp_flood_test.cpp`](tests/udp_flood_test.cpp), [design §2](docs/design.md#2-architecture-and-threading), [threat model](docs/threat-model.md#sensor-and-input-faults) |
 | **Gate screen.** A conservative bound skips pairs that cannot gate, with no change in results | 1,000 targets, 10% clutter: median scan 145 ms → 10.0 ms; instructions 8.55 G → 1.14 G (callgrind on a RelWithDebInfo build, 3 scans) | `GateScreen.NeverChangesResults` in [`gate_screen_test.cpp`](tests/gate_screen_test.cpp), [proof in design §10](docs/design.md#10-performance), [benchmarks](docs/benchmarks.md#profiling-and-the-one-optimisation) |
-| **Capacity.** One engine thread on a 2 vCPU VM, one scan per second (1 Hz), 10% clutter, p99 scan time ≤ 100 ms | Legacy filter (M3): 2,976 targets (about 4,150 live tracks). The p99 is noisy at this edge: 3,000 targets measured 125 ms in another sweep. The IMM against the legacy filter on one machine: 2,898 against 2,976 tracks per core (97%); throughput 213,000 against 327,000 measurements/s | [Benchmarks: tracks per core](docs/benchmarks.md#tracks-per-core), [motion models](docs/benchmarks.md#motion-models-legacy-cv-against-the-imm-adr-0014), [ADR 0011](docs/adr/0011-benchmark-method.md) |
+| **Capacity.** One engine thread on a 2 vCPU VM, one scan per second (1 Hz), 10% clutter, p99 scan time ≤ 100 ms Engine only (`Engine::on_scan`, no networking). Legacy filter: 2,976 targets (about 4,150 live tracks). The p99 is noisy at this edge: 3,000 targets measured 125 ms in another sweep. The IMM against the legacy filter on one machine: 2,898 against 2,976 tracks per core (97%); throughput 213,000 against 327,000 measurements/s. The daemon's defaults are lower: at most 1,024 tracks (`--max-tracks`) and 256 measurements per scan | [Benchmarks: tracks per core](docs/benchmarks.md#tracks-per-core), [motion models](docs/benchmarks.md#motion-models-legacy-cv-against-the-imm-adr-0014), [ADR 0011](docs/adr/0011-benchmark-method.md) |
 | **End-to-end latency.** UDP send to WebSocket snapshot through the real daemon on loopback, 100 targets | Median 101 ms with the reorder window off, 502 ms with the default 0.5 s window. Scan assembly and the window dominate, not processing | [Benchmarks: end-to-end latency](docs/benchmarks.md#end-to-end-latency-daemon) |
 
 Performance figures were measured on a 2 vCPU virtualised Intel Xeon with 8 GB
@@ -265,7 +296,7 @@ See [troubleshooting in the install guide](docs/install.md#troubleshooting).
 | [`src/apps/`](src/apps) | `sifted_fusiond`, the fusion daemon (live and replay) |
 | [`tests/`](tests) | Unit, ground-truth regression, degraded-network, fault-injection and UDP flood tests |
 | [`eval/`](eval) | Shared ground-truth scoring library, the `sifted_eval` scorecard tool, the `sifted_realeval` real-data tool and the real-data manifest |
-| [`fuzz/`](fuzz) | Six libFuzzer targets and their seed corpora |
+| [`fuzz/`](fuzz) | Seven libFuzzer targets and their seed corpora |
 | [`benchmarks/`](benchmarks) | Engine benchmark harness, end-to-end latency script, report generator |
 | [`sim/`](sim) | Python sensor simulators, scenarios, fault injection, impairment proxy, OpenSky adapter |
 | [`app/`](app) | Python launcher and local control API |
@@ -289,6 +320,21 @@ al., *Bringing up OpenSky*, IPSN 2014 ([provenance](docs/real-data-evaluation.md
 [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors. The
 operator view bundles [Leaflet](https://leafletjs.com/) 1.9.4 (BSD 2-Clause,
 `web/vendor/leaflet/LICENSE`).
+
+## How this was built
+
+Most of the code, tests and documentation here were written by Claude Code,
+Anthropic's coding agent, working under my direction in milestone sessions.
+[`CLAUDE.md`](CLAUDE.md) is the guidance file the agent reads. My part:
+
+- setting the scope, the milestone order and the working rules for each
+  session (no special-cased fixes; report anything left unverified);
+- building and running every preset, sanitizer run and installer on my own
+  WSL2 machine, and reporting the failures that were then fixed;
+- deciding what to keep, cut and publish, including the real-data result
+  where the tracker loses to dead reckoning.
+
+ADRs 0004-0007 were recorded after the code they describe; each says so.
 
 ## License
 
