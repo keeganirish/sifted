@@ -769,7 +769,7 @@ function watchItems(a) {
   }
   items.push([Math.min(10, D / 4), "Click a track on the map or in the Tracks tab to see why the system believes it: each association, near miss and lifecycle decision."]);
   if (a.network === "lossy" || a.network === "outage") {
-    items.push([1, "The network loses, delays, reorders and duplicates frames: duplicates are suppressed and late frames put back in order (counters below)."]);
+    items.push([1, "The network loses, delays, reorders and duplicates frames: duplicates are suppressed and late frames put back in order. Out of Order (below) counts only frames too late to use."]);
   }
   if (a.outage_at_s != null) {
     items.push([a.outage_at_s, "Link outage for 8 s: every track stops updating and coasts on prediction. Nothing is invented."]);

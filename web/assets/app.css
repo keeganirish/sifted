@@ -8,7 +8,7 @@
   --border-2: #2d394a;
   --text: #e6edf3;
   --muted: #8b98a8;
-  --faint: #5d6a7b;
+  --faint: #7d8a9c;
   --accent: #3ea6ff;
   --accent-2: #1f7fd6;
   --ok: #3fb950;
@@ -131,8 +131,8 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn-sm { padding: 6px 11px; font-size: 12.5px; }
 .btn-block { width: 100%; margin-top: 6px; padding: 11px 16px; }
-.btn-primary { background: var(--accent-2); border-color: #2b8ce6; }
-.btn-primary:hover:not(:disabled) { background: #2a8ae3; }
+.btn-primary { background: #1868b2; border-color: #2b8ce6; }
+.btn-primary:hover:not(:disabled) { background: #1b6cc0; }
 .btn-secondary { background: var(--panel-3); border-color: var(--border-2); }
 .btn-secondary:hover:not(:disabled) { background: #222d3c; }
 .btn-ghost { background: transparent; border-color: var(--border); color: var(--muted); }
